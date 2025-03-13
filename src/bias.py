@@ -48,7 +48,7 @@ class TractPatch(object):
         return list(data.keys())
 
 def load_patch(field):
-    """Function to load the coordicates of tract and patch coordinates
+    """Function to load the coordinates of tract and patch coordinates
 
     Parameter
     ---------------------------
@@ -66,7 +66,7 @@ def load_patch(field):
     
     data = {}
 
-    file_path = f"tracts_patches_W-{field}.txt"
+    file_path = f"../Field/tracts_patches_W-{field}.txt"
     with open(file_path, 'r') as file:
         lines = file.readlines()
     
@@ -128,8 +128,8 @@ def Download_HSC(args, sqls, tracts2, Unzip=True):
     Unzip: bool
     Set True if you want to separate the data files into tracts.
     """
-    release_year   =   "s21"
-    release_version =   'dr4-citus'
+    release_year   =   "s23"
+    release_version =   'dr4'
 
     ig = np.arange(len(tracts2))
     Input = list(zip(ig, tracts2))
@@ -138,12 +138,13 @@ def Download_HSC(args, sqls, tracts2, Unzip=True):
     
     for i,sql in enumerate(sqls):
         name = sqls[i].split('.')[0]
-        prefix = f'database/{name}/sql_{name}'
-        prefix2 = f'database/{name}/tracts_{name}'
+        prefix = f'../database/{name}/sql_{name}'
+        prefix2 = f'../database/{name}/tracts_{name}'
         
         os.makedirs(prefix, exist_ok=True)
         os.makedirs(prefix2, exist_ok=True)
         # Read SQL file content here
+        sql = '../sql/'+sql
         with open(sql, 'r') as f:
             sql_content = f.read()
 
@@ -179,7 +180,7 @@ def separateTract(ig_tract, prefix,prefix2):
     """
     ig, tract = ig_tract
     print('unzipping group: %s' %ig)
-    infname     =   f'{ig}_bias.fits'
+    infname     =   '%s.%s'%(ig,args.out_format)
     infname     =   os.path.join(prefix,infname)
     if not os.path.exists(infname):
         print('Does not have input file')
@@ -187,7 +188,7 @@ def separateTract(ig_tract, prefix,prefix2):
     fitsAll     =   fits.getdata(infname)
     print('read %s galaxies' %len(fitsAll))
 
-    outfname    =   os.path.join(prefix2,'%s_bias.fits' %(tract))
+    outfname    =   os.path.join(prefix2,'%s.fits' %(tract))
     if os.path.exists(outfname):
         print('already have file for tract: %s'%tract)
     else:
@@ -198,7 +199,7 @@ def separateTract(ig_tract, prefix,prefix2):
     return
 
 class arguments(object):
-    """Class to convert argument dictionary into argument class
+    """Class to convert keys dictionary into argument class
 
     Parameter
     ---------------------------------------
@@ -206,13 +207,16 @@ class arguments(object):
     Must include 'user', 'out_format', 'delete_job', 'api_url', 'nomail', 'skip_syntax_check' and 'password_env'
     """
     def __init__(self, dict):
-        self.user = dict['user']
-        self.out_format = dict['out_format']
-        self.delete_job = dict['delete_job']
-        self.api_url = dict['api_url']
-        self.nomail = dict['nomail']
-        self.skip_syntax_check = dict['skip_syntax_check']
-        self.password_env = dict['password_env']
+        self.user = dict.get("user", "name")
+        self.password_env = dict.get("password_env", "HSC_SSP_CAS_PASSWORD")
+        self.api_url = dict.get("api_url", "https://hscdata.mtk.nao.ac.jp/datasearch/api/catalog_jobs/")
+        self.tracts = dict.get("tracts", "all")
+        self.out_format = dict.get("format", "fits")
+        self.release_year = dict.get("release_year", "s23")
+        self.nomail = dict.get("nomail", True)
+        self.skip_syntax_check = dict.get("skip_syntax_check", False)
+        self.delete_job = dict.get("delete_job", True)
+        self.sql = dict.get("sql", list(["star_default.sql"]))
 
 ###############################################################################
 def Mask(tract, TractPatch_dict):
@@ -236,24 +240,24 @@ def Mask(tract, TractPatch_dict):
     ra = corner[:,0]%360
     dec = corner[:,1]
 
-    # 配列をソートして二番目に大きい値と二番目に小さい値を取得
+    # sort the array and get the edge coordinate of each tract
     sorted_ra = np.sort(ra)
-    max_ra = sorted_ra[-2]-0.1  # 二番目に大きい値
-    min_ra = sorted_ra[1]+0.1  # 二番目に小さい値
+    max_ra = sorted_ra[-2]-0.1
+    min_ra = sorted_ra[1]+0.1
 
     sorted_dec = np.sort(dec)
-    max_dec = sorted_dec[-2]-0.1  # 二番目に大きい値
-    min_dec = sorted_dec[1]+0.1  # 二番目に小さい値
+    max_dec = sorted_dec[-2]-0.1
+    min_dec = sorted_dec[1]+0.1
     
     os.makedirs('mask', exist_ok=True)
     filename = f"mask/tract_{tract}_flagged.fits"
     if not os.path.exists(filename):
         if (max_ra-min_ra>300):
-            max_ra = sorted_ra[0]-0.1  # 1番大きい値
-            min_ra = sorted_ra[-1]+0.1  # 1番小さい値
+            max_ra = sorted_ra[0]-0.1
+            min_ra = sorted_ra[-1]+0.1
 
-            max_dec = sorted_dec[-2]-0.1  # 二番目に大きい値
-            min_dec = sorted_dec[1]+0.1  # 二番目に小さい値
+            max_dec = sorted_dec[-2]-0.1
+            min_dec = sorted_dec[1]+0.1
             file = f"tract_{tract}_left.fits"
             command = "HSC-SSP_brightStarMask_Arcturus/venice-4.0.3/bin/venice -r -xmin %s -xmax %s -ymin %s -ymax %s -coord spher -o mask/tract_%s_left.fits"%(0, max_ra, min_dec, max_dec,tract)
             os.system(command)
@@ -337,13 +341,16 @@ def Mask(tract, TractPatch_dict):
     return df
 
 ##############################################################################################################
-def get_property_all(tractpatch):
+def get_property_all(tractpatch, target_healpix):
     """function to get the properties of healpixels in a single field (AEGIS, autumn, hectomap or spring)
 
     Parameter
     ------------------------------------------
     tractpatch: instance
     instance of tractpatch class. Includes the information about the tract and patch included in the field considered.
+
+    target_healpix: np array
+    array of target healpixels
 
     output
     ------------------------------------------
@@ -355,6 +362,7 @@ def get_property_all(tractpatch):
     
     tractpatch_dict = tractpatch.data
     tractlist = tractpatch.get_tract()
+    
     with Pool(processes=20) as pool:  # Adjust number of processes based on your CPU
         func = partial(get_property_tract, tractpatch_dict=tractpatch_dict)
         results = pool.map(func, tractlist)
@@ -375,7 +383,17 @@ def get_property_all(tractpatch):
         property = all_property.groupby('healpix').apply(lambda x: pd.Series(
             {col: np.sum(x[col] * x['Mask']) / np.sum(x['Mask']) for col in all_columns} |  # Seeing, depth, extinction
             {'area': np.sum(x['Mask']) / np.sum(x['counts']) * area}|
-            {col: np.sum(x[col])/(np.sum(x['Mask']) / np.sum(x['counts']) * area) for col in names})).reset_index()
+            #{'target': np.sum(x['target'])/(np.sum(x['Mask']) / np.sum(x['counts']) * area)}|
+            {col: np.sum(x[col])/area for col in names})).reset_index()
+
+        u, counts = np.unique(target_healpix, return_counts=True)
+        data1 = {
+            'healpix':u,
+            'target':counts
+        }
+
+        property = pd.merge(property, data1, on='healpix', how='left')
+        property['target'] = property['target']/property['area']
         
         t = Table.from_pandas(property)
         return t
@@ -411,10 +429,10 @@ def get_property_tract(tract, tractpatch_dict):
 
     ra = np.array(mask['ra'])
     dec = np.array(mask['dec'])
-    healpy = np.array(mask['healpix'])
+    healpy = np.array(mask['healpix']) #entire healpix in the tract
     _ra = ra[out_mask]
     _dec = dec[out_mask]
-    _healpy = healpy[out_mask]
+    _healpy = healpy[out_mask] #healpix outside the stellar mask
 
     patch_dict = tractpatch_dict[tract]['patch']
 
@@ -452,7 +470,7 @@ def get_property_tract(tract, tractpatch_dict):
     #properties = add_eff_area(mask, properties)
     properties = add_ext(properties)
     #############star file name
-    properties = add_object_count(properties, args.sql,tract)
+    properties = add_star_count(properties, args.sql,tract)
     return properties
 
 def get_closest_patch(ra, dec, patch_dict):
@@ -557,6 +575,17 @@ def get_patch_property(patch_id, tract):
     
     
 def add_ext(properties):
+    """function to add extinction column to pd properties
+
+    Parameter
+    ------------------------------------------------------
+    properties: pd dataframe with imaging properties of healpixels
+    Must include healpix column
+
+    Output
+    ------------------------------------------------------
+    properties: pd dataframe with imaging properties of healpixels
+    """
     with fits.open('csfd_ebv.fits') as hdu:
         data = hdu[1].data
         im=data["T"]
@@ -593,7 +622,18 @@ def add_ext(properties):
     return properties
     
 
-def add_object_count(properties, sqls, tract):
+def add_star_count(properties, sqls, tract):
+    """function to add stellar counts to pd properties
+
+    Parameter
+    ------------------------------------------------------
+    properties: pd dataframe with imaging properties of healpixels
+    Must include healpix column
+
+    Output
+    ------------------------------------------------------
+    table2: pd dataframe with imaging properties of healpixels
+    """
     table2 = properties
     for sql in sqls:
         name =  sql.split('.')[0]
@@ -617,61 +657,51 @@ def add_object_count(properties, sqls, tract):
     return table2
     
 ###########################################################################################################
-def main():
-    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument('--user', '-u', help='specify your STARS account')
-    parser.add_argument('--password-env', default='HSC_SSP_CAS_PASSWORD', help='environment variable for STARS')
-    parser.add_argument('--api-url',
-                        default='https://hscdata.mtk.nao.ac.jp/datasearch/api/catalog_jobs/',
-                        help='for developers')
-    #If only using parts of the whole HSC data
-    parser.add_argument("--tracts", nargs = "*", help = "properties", default = '')
-    parser.add_argument("--sql" , nargs= "*", help = "sql file for stars and target galaxies", default = '')
-    parser.add_argument("--patch_sql" , nargs= "*", help = "sql file for patch properties", default = 'patch_property.sql')
+def imaging_bias(object, selection, keys):
+    """function to calculate the imaging systematics and target density for each healpixel
 
-    parser.add_argument('--format', '-f', dest='out_format', default='fits',
-                        choices=['csv', 'csv.gz', 'sqlite3', 'fits'],
-                        help='specify output format')
-    parser.add_argument('--release_year', '-r', default = 's21',
-                        choices='s15 s16 s17 s18 s19 s20 s21'.split(),
-                        help='the release year')
-    parser.add_argument('--nomail', '-M', action='store_true',
-                        help='suppress email notice')
+    Parameters
+    --------------------------------------------------------------------------------------
+    object: structured numpy array of HSC objects with relevant columns
+        for target selection
 
-    parser.add_argument('--preview', '-p', action='store_true',
-                        help='quick mode (short timeout)')
-    parser.add_argument('--skip-syntax-check', '-S', action='store_true',
-                        help='skip syntax check')
-    parser.add_argument('--delete-job', '-D', action='store_true',
-                        help='delete job after your downloading')
+    selection: bool array of target galaxies
+
+    keys: dictionary to download from HSC database
+
+    Output
+    --------------------------------------------------------------------------------------
+    autumn_property, AEGIS_property, hectomap_property, spring_property: table with column: healpix, {g,r,i,z,y}seeing,
+    {g,r,i,z,y}_depth, extinction, target, star, area
+    """
     global args
-    args = parser.parse_args()
+    args = arguments(keys)
 
 ###################################################################    
     #if no tracts, all tract in HSC database will be downloaded
     tractlist = args.tracts
     sql_list = args.sql
     user = args.user
-    patch_sql = args.patch_sql
     
     ngroups = 1
-    if (tractlist==''):
-        tractname= 'fieldTractInfoS21.csv'
+    if (tractlist=='all'):
+        tractname= 'TractInfoS23.csv'
         tracts      =   ascii.read(tractname)['tract']
         tractlist = list(tracts)
-        ngroups = 20
+        ngroups = 40
 
     tracts2     =   HQR.chunkNList(list(tractlist),ngroups)
 
 ####################################################################
-    #download stars and targets if necessary
+    #download imaging property per patch
+    Download_HSC(args=args, sqls=list(['patch_property.sql']), tracts2=tracts2, Unzip=True)
+    
+    #download stars if necessary
     if (sql_list!=''):
-        if(user is None):
-            parser.error("The '--user' argument is required.")
+        if(user=='name'):
+            parser.error("The 'user' argument is required.")
         else:
             Download_HSC(args=args, sqls=sql_list, tracts2=tracts2, Unzip=True)
-    
-    Download_HSC(args=args, sqls=patch_sql, tracts2=tracts2, Unzip=True)
 
 ####################################################################
     #tract_patch 
@@ -681,16 +711,31 @@ def main():
     spring = TractPatch("spring")
     
 ####################################################################
+    target = object[cut]
+    target_ra = target["RA"]
+    target_dec = target["DEC"]
+    target_healpix = hp.pixelfunc.ang2pix(nside=nside, theta=target_ra, phi=target_dec, lonlat=True)
+    
     #Get Property for each healpixel
-    autumn_property = get_property_all(autumn)
-    autumn_property.write('autumn_property.fits', format='fits', overwrite=True)
-    AEGIS_property = get_property_all(AEGIS)
-    AEGIS_property.write('AEGIS_property.fits', format='fits', overwrite=True)
-    hectomap_property = get_property_all(hectomap)
-    hectomap_property.write('hectomap_property.fits', format='fits', overwrite=True)
-    spring_property = get_property_all(spring)
-    spring_property.write('spring_property.fits', format='fits', overwrite=True)
-    return
+    directory = '../property'
+    os.makedirs(directory, exist_ok=True)
 
-if __name__ == '__main__':
-    main()
+    autumn_file     =   os.path.join(directory,'autumn_property.fits')
+    autumn_property = get_property_all(autumn, target_healpix)
+    autumn_property.write(autumn_file, format='fits', overwrite=True)
+
+    AEGIS_file     =   os.path.join(directory,'AEGIS_property.fits')
+    AEGIS_property = get_property_all(AEGIS, target_healpix)
+    AEGIS_property.write(AEGIS_file, format='fits', overwrite=True)
+
+    hectomap_file     =   os.path.join(directory,'hectomap_property.fits')
+    hectomap_property = get_property_all(hectomap, target_healpix)
+    hectomap_property.write(hectomap_file, format='fits', overwrite=True)
+
+    spring_file     =   os.path.join(directory,'spring_property.fits')
+    spring_property = get_property_all(spring, target_healpix)
+    spring_property.write(spring_file, format='fits', overwrite=True)
+    
+    return autumn_property, AEGIS_property, hectomap_property, spring_property
+
+######################################################################
