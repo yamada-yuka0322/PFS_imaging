@@ -395,11 +395,11 @@ def get_property_all(tractpatch, target_healpix):
         property = pd.merge(property, data1, on='healpix', how='left')
         property['target'] = property['target']/property['area']
         
-        t = Table.from_pandas(property)
-        return t
+        #t = Table.from_pandas(property)
+        return property
     else:
         # return table if empty
-        return Table()
+        return pd.DataFrame()
     
     
 
