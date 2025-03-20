@@ -1,13 +1,11 @@
-from sklearn import linear_model
+import numpy as np
+import pandas as pd
+
 from sklearn.preprocessing import PolynomialFeatures
 from sklearn.linear_model import LinearRegression
 from sklearn.model_selection import train_test_split
-import pandas as pd
-from sklearn.metrics import r2_score
-from sklearn.metrics import mean_squared_error
+from sklearn.metrics import r2_score, mean_squared_error
 
-import numpy as np
-import sys,os
 
 def linear_weights(property, pixels, keys):
     """function to calculate weights using linear regression
