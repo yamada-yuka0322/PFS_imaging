@@ -7,10 +7,6 @@ from sklearn.metrics import r2_score
 from sklearn.metrics import mean_squared_error
 
 import numpy as np
-import matplotlib.pyplot as plt
-
-import healpy as hp
-from astropy.io import fits
 import sys,os
 
 def linear_weights(property, pixels, keys):
