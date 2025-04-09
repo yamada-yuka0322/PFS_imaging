@@ -1,17 +1,33 @@
 from sklearn import linear_model
 from sklearn.preprocessing import PolynomialFeatures
 from sklearn.linear_model import LinearRegression
+from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 import pandas as pd
 from sklearn.metrics import r2_score
 from sklearn.metrics import mean_squared_error
 
-import numpy as np
-import matplotlib.pyplot as plt
-
 import healpy as hp
-from astropy.io import fits
-import sys,os
+
+import numpy as np
+
+nside = 256
+
+def target_weights(object, selection, properties):
+    targets = object[selection]
+    target_id = targets['OBJID']
+    target_ra = targets['RA']%360
+    target_dec = targets['DEC']
+    
+    target_healpy = hp.ang2pixel(nside=nside, theta=target_ra, phi=target_dec, lonlat=True)
+    
+    target_data = pd.DataFrame({'id':target_id, 'healpix':target_healpy})
+    
+    target_weight = pd.merge(target_data, properties, on="healpix", how="left")
+    
+    return target_weight
+    
+    
 
 def linear_weights(property, pixels, keys):
     """function to calculate weights using linear regression
@@ -69,12 +85,9 @@ def linear_weights(property, pixels, keys):
     _density = regr.predict(X)
     _weight = 1/(_density*np.std(df['target'])/np.average(df['target'])+1)
 
-    data = {
-        'healpix' : df['healpix'],
-        'weights' : _weight
-    }
+    df['weights'] = _weight
 
-    return pd.DataFrame(data)
+    return df
 
 def quadratic_weights(property, pixels, keys):
     """function to calculate weights using quadratic regression

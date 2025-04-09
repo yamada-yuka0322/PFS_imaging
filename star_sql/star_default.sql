@@ -274,6 +274,36 @@ m1.tract  IN  ({$tract})                  AND
 f1.i_cmodel_mag - f2.i_psfflux_mag > -0.08 AND
     
 f1.i_cmodel_mag - f1.a_i <22.0
+
+ -- Not failed at finding the center
+AND NOT f2.g_sdsscentroid_flag
+AND NOT f2.r_sdsscentroid_flag
+AND NOT f2.i_sdsscentroid_flag
+AND NOT f2.z_sdsscentroid_flag
+
+-- The object's center is not outside the image
+AND NOT f1.g_pixelflags_edge    
+AND NOT f1.r_pixelflags_edge
+AND NOT f1.i_pixelflags_edge
+AND NOT f1.z_pixelflags_edge
+
+-- Not saturated at the center  
+AND NOT f1.g_pixelflags_saturatedcenter
+AND NOT f1.r_pixelflags_saturatedcenter
+AND NOT f1.i_pixelflags_saturatedcenter
+AND NOT f1.z_pixelflags_saturatedcenter
+
+-- The center is not interpolated
+AND NOT f1.g_pixelflags_interpolatedcenter
+AND NOT f1.r_pixelflags_interpolatedcenter
+AND NOT f1.i_pixelflags_interpolatedcenter
+AND NOT f1.z_pixelflags_interpolatedcenter
+
+-- The center is not affected by a cosmic ray
+AND NOT f1.g_pixelflags_crcenter
+AND NOT f1.r_pixelflags_crcenter
+AND NOT f1.i_pixelflags_crcenter
+AND NOT f1.z_pixelflags_crcenter
 --- NOT meas.i_pixelflags_clipped           AND --no need
 --- NOT meas2.i_hsmshaperegauss_flag        AND --no need
 --- meas2.i_hsmshaperegauss_sigma != 'NaN'  AND --no need
