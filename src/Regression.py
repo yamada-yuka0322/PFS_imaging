@@ -9,12 +9,14 @@ from sklearn.metrics import mean_squared_error
 
 import torch
 from torch.utils.data import TensorDataset, DataLoader
+import torch.nn as nn
 
 import healpy as hp
 
 import numpy as np
 
 nside = 256
+area = hp.nside2pixarea(nside,degrees=True)
 
 def target_weights(object, selection, properties):
     targets = object[selection]
@@ -166,6 +168,22 @@ def quadratic_weights(property, pixels, keys):
 
     return df_cleaned
 
+class CustomLoss(nn.Module):
+    def __init__(self, model, lambda_reg=1e-3):
+        super().__init__()
+        self.model = model
+        self.lambda_reg = lambda_reg
+
+    def forward(self, output, target, fpix):
+        weighted_mse = torch.mean(fpix * (output - target) ** 2)
+
+        # L2正則化項：全パラメータに対して
+        l2_reg = sum(torch.norm(param) ** 2 for param in self.model.parameters())
+
+        return weighted_mse + self.lambda_reg * l2_reg
+
+
+
 def nn_weights(property, pixels, keys):
     """function to calculate the weights using neural network
 
@@ -194,18 +212,23 @@ def nn_weights(property, pixels, keys):
     
     mean = np.sum(df_cleaned["target"]*df_cleaned["area"])/np.sum(df_cleaned["area"])
     density = df_cleaned["target"]/mean
+    
+    fpix = df_cleaned['area']/area
 
     X = np.concatenate([np.array(df_standardized[key]).reshape(-1, 1) for key in keys], axis=1)
 
-    train_X, test_X, train_Y, test_Y = train_test_split(X, density)
+    train_X, test_X, train_Y, test_Y, train_fpix, test_fpix = train_test_split(X, density, fpix)
     
     dtype = torch.float
-    X = torch.from_numpy(train_X).type(dtype)
-    Y = torch.from_numpy(train_Y).type(dtype)
-    Y = Y.view(-1, 1)
+    train_X = torch.from_numpy(train_X).type(dtype)
+    train_Y = torch.from_numpy(train_Y).type(dtype)
+    train_Y = train_Y.view(-1, 1)
     
+    train_Fpix = torch.from_numpy(train_fpix).type(dtype)
+    
+    X_all = torch.from_numpy(X).type(dtype)
     # Create a data loader with batch size of 4.
-    dataset = TensorDataset(X, Y)
+    dataset = TensorDataset(train_X, train_Y, train_Fpix)
     loader = DataLoader(dataset, batch_size=4, shuffle=True)
 
     loss_list = []
@@ -216,13 +239,14 @@ def nn_weights(property, pixels, keys):
         torch.nn.ReLU(),
         torch.nn.Linear(6, 1, bias=True),
     )
-    loss_fn = torch.nn.MSELoss()
+    
+    loss_fn = CustomLoss(model, lambda_reg=1e-3)
     optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
 
     for t in range(5000):
-        for x, y in loader:
-            y_hat = model(x)
-            loss = loss_fn(y_hat, y)
+        for _x, _y, _fpix in loader:
+            y_hat = model(_x)
+            loss = loss_fn(y_hat, _y, _fpix)
 
             optimizer.zero_grad()
             loss.backward()
@@ -232,8 +256,11 @@ def nn_weights(property, pixels, keys):
             y_hat_all = model(X)
             loss_epoch = loss_fn(y_hat_all, Y).item()
             loss_list.append(loss_epoch)
-            
-    density = y_hat_all.numpy().reshape(1, -1)
+    
+    with torch.no_grad():
+        Y_pred = model(X).numpy()
+        
+    density = Y_pred.reshape(1, -1)
     _weight = 1/density
     df_cleaned['weights'] = _weight
     return df_cleaned
