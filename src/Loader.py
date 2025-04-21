@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 from astropy.io import fits
 
-import cuts as Cuts
+from pfstarget import cuts as Cuts
 
 class Star(object):
     """class object to contain the star objects for a single tract
@@ -15,7 +15,7 @@ class Star(object):
         
     def load_stars(self, path, tract):
         filename = path + f"/tracts_{self.name}/{tract}.fits"
-        with fits.open(path) as hdu:
+        with fits.open(filename) as hdu:
             data = hdu[1].data
             self.ra = data['ra']%360
             self.dec = data['dec']
@@ -27,14 +27,16 @@ class Random(object):
     def __init__(self):
         self.ra = None
         self.dec = None
+        self.patch = None
         self.mask = None
         
     def load_random(self, path, tract):
         filename = path + f"/tracts_random/{tract}.fits"
-        with fits.open(path) as hdu:
+        with fits.open(filename) as hdu:
             data = hdu[1].data
             self.ra = data['ra']%360
             self.dec = data['dec']
+            self.patch = data['patch']
             self.mask = Cuts.random_masking(data)
 
 class Patches(object):
@@ -50,7 +52,7 @@ class Patches(object):
     
     def load_patches(self, path, property_list):
         filename = path + f"/patches.fits"
-        with fits.open(path) as hdu:
+        with fits.open(filename) as hdu:
             data = hdu[1].data
             self.tract = data['tract']
             self.patch = data['patch']
@@ -63,8 +65,8 @@ class Patches(object):
     def get_properties(self, tract):
         properties = {}
         selection = (self.tract == tract)
-        for key, data in self.property.item():
+        for key, data in self.property.items():
             properties[key] = data[selection]
             
         properties['patch'] = self.patch[selection]
-        return properties
+        return pd.DataFrame(properties)

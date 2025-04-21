@@ -1,6 +1,7 @@
 import re
 import numpy as np
 from astropy.io import fits
+from astropy.table import Table
 import healpy as hp
 import os
 from multiprocessing import Pool
@@ -20,7 +21,7 @@ property_name = ['gseeing', 'rseeing', 'iseeing', 'zseeing', 'yseeing', 'g_depth
 args    =   None
 diffver =   '-colorterm'
 datapath = f"/data/PFS/s23{diffver}"
-nside = 256
+nside = 1024
 area = hp.nside2pixarea(nside,degrees=True)
 
 class TractPatch(object):
@@ -64,7 +65,7 @@ def load_patch(field):
     
     data = {}
 
-    file_path = f"../Field/tracts_patches_W-{field}.txt"
+    file_path = f"/PFS_imaging/Field/tracts_patches_W-{field}.txt"
     with open(file_path, 'r') as file:
         lines = file.readlines()
     
@@ -124,13 +125,14 @@ def get_property_all(tractpatch, target_healpix, tractlist, patches):
     includes seeing, depth, stellar density, target density and extinction
     """
 
+
     tractall = np.array(tractpatch.get_tract())
     tractlist = np.array(tractlist)
     
     tractlist = tractlist[np.isin(tractlist, tractall)]
     if len(tractlist)==0:
         print(f"No tracts in {tractpatch.field}")
-        return 0
+        return pd.DataFrame()
     else:
         with Pool(processes=20) as pool:  # Adjust number of processes based on your CPU
             func = partial(get_property_tract, patches=patches)
@@ -162,7 +164,7 @@ def get_property_all(tractpatch, target_healpix, tractlist, patches):
             return property
         else:
             # return table if empty
-            return 0
+            return pd.DataFrame()
     
     
 
@@ -185,40 +187,29 @@ def get_property_tract(tract, patches):
     """
     random = Random()
     random.load_random(datapath, tract)
-
     ra = random.ra
     dec = random.dec
     patch = random.patch
-    
     mask = random.mask #within mask
+    
+    edges = (ra<np.max(ra) - 0.1)&(ra>np.min(ra) + 0.1)&(dec<np.max(dec) - 0.1)&(dec>np.min(dec) + 0.1)
+    ra = ra[edges]
+    dec = dec[edges]
+    patch = patch[edges]
+    mask = mask[edges]
+    
     out_mask = ~mask
     
     healpy = hp.ang2pix(nside=nside, theta=ra, phi=dec, lonlat=True) #entire healpix in the tract
     
     _ra = ra[out_mask]
     _dec = dec[out_mask]
-    _patch = patch[random]
+    _patch = patch[out_mask]
     _healpy = healpy[out_mask] #healpix outside the stellar mask
+    print(f"random distribution ra max:{np.max(_ra)} min:{np.min(_ra)}, dec  max:{np.max(_dec)} min:{np.min(_dec)}")
 
     
     random_data = pd.DataFrame({'patch':_patch, 'healpix':_healpy})
-    u, counts = np.unique(healpy, return_counts=True)
-
-    data1 = {
-        'healpix':u,
-        'counts':counts
-    }
-    table1 = pd.DataFrame(data1)
-    random_data = pd.merge(random_data, table1, on='healpix', how='left')
-
-    u, counts = np.unique(_healpy, return_counts=True)
-
-    data1 = {
-        'healpix':u,
-        'Mask':counts
-    }
-    table1 = pd.DataFrame(data1)
-    random_data = pd.merge(random_data, table1, on='healpix', how='left')
     
     property = patches.get_properties(tract)
     # Check for empty dataframe
@@ -227,9 +218,26 @@ def get_property_tract(tract, patches):
         return None
 
     properties = pd.merge(random_data, property, on='patch', how='left')
-    
     # take the average of the properties for the random points between all the overlapping patches
-    properties = property.groupby('healpix')[property_name].mean().reset_index()
+    properties = properties.groupby('healpix')[property_name].mean().reset_index()
+    
+    u, counts = np.unique(healpy, return_counts=True)
+
+    data1 = {
+        'healpix':u,
+        'counts':counts
+    }
+    table1 = pd.DataFrame(data1)
+    properties = pd.merge(properties, table1, on='healpix', how='left')
+
+    u, counts = np.unique(_healpy, return_counts=True)
+
+    data1 = {
+        'healpix':u,
+        'Mask':counts
+    }
+    table1 = pd.DataFrame(data1)
+    properties = pd.merge(properties, table1, on='healpix', how='left')
     
     #properties = add_eff_area(mask, properties)
     properties = add_ext(properties)
@@ -291,8 +299,23 @@ def get_patch_property(patch_id, tract):
     #result = pd.merge(table1, properties, on='healpix', how='inner')
     #return result
     
-    
 def add_ext(properties):
+    dustfile = '/pfstarget/src/pfstarget/dat/desi_dust_gr_512.fits'
+    with fits.open(dustfile) as hdu:
+        data = hdu[1].data
+        healpix = data["HPXPIXEL"]
+        EBV = data["EBV_GR"]
+        
+    npix = hp.nside2npix(512)
+    ebv_map = np.zeros(npix, dtype=np.float32)
+    
+    ebv_map[healpix] = EBV
+    ebv = hp.ud_grade(ebv_map, nside)
+    properties['extinction'] = ebv[properties['healpix']]
+    
+    return properties
+    
+def old_add_ext(properties):
     """function to add extinction column to pd properties
 
     Parameter
@@ -352,12 +375,17 @@ def add_star_count(properties, stardict, tract):
     ------------------------------------------------------
     table2: pd dataframe with imaging properties of healpixels
     """
-    for sql, name in stardict.item():
+    for sql, name in stardict.items():
         star = Star(sql)
         star.load_stars(datapath, tract)
         
         ra = star.ra
         dec = star.dec
+        
+        edges = (ra<np.max(ra) - 0.1)&(ra>np.min(ra) + 0.1)&(dec<np.max(dec) - 0.1)&(dec>np.min(dec) + 0.1)
+        ra = ra[edges]
+        dec = dec[edges]
+        
         healpy = hp.ang2pix(nside=nside, theta=ra, phi=dec, lonlat=True)
         
         _healpy, counts = np.unique(healpy, return_counts=True)
@@ -371,7 +399,7 @@ def add_star_count(properties, stardict, tract):
     return properties
     
 ###########################################################################################################
-def imaging_bias(object, selection, tractlist = ''):
+def imaging_bias(object, tractlist = ''):
     """function to calculate the imaging systematics and target density for each healpixel
 
     Parameters
@@ -408,9 +436,12 @@ def imaging_bias(object, selection, tractlist = ''):
     patches = Patches()
     patches.load_patches(datapath, property_name)
 ####################################################################
-    target = object[selection]
+    target = object
     target_ra = target["RA"]
     target_dec = target["DEC"]
+    
+    print(f"target distribution ra max:{np.max(target_ra)} min:{np.min(target_ra)}, dec  max:{np.max(target_dec)} min:{np.min(target_dec)}")
+    
     target_healpix = hp.pixelfunc.ang2pix(nside=nside, theta=target_ra, phi=target_dec, lonlat=True)
     
     #Get Property for each healpixel
@@ -419,31 +450,35 @@ def imaging_bias(object, selection, tractlist = ''):
 
     autumn_file     =   os.path.join(directory,'autumn_property.fits')
     autumn_property = get_property_all(autumn, target_healpix, tractlist, patches)
-    if autumn_property == 0:
+    if autumn_property.empty:
         print(f"no tract in autumn field")
     else:
-        autumn_property.write(autumn_file, format='fits', overwrite=True)
+        table = Table.from_pandas(autumn_property)
+        table.write(autumn_file, format='fits', overwrite=True)
 
     AEGIS_file     =   os.path.join(directory,'AEGIS_property.fits')
     AEGIS_property = get_property_all(AEGIS, target_healpix, tractlist, patches)
-    if AEGIS_property == 0:
+    if AEGIS_property.empty:
         print(f"no tract in AEGIS field")
     else:
-        AEGIS_property.write(AEGIS_file, format='fits', overwrite=True)
-
+        table = Table.from_pandas(AEGIS_property)
+        table.write(AEGIS_file, format='fits', overwrite=True)
+        
     hectomap_file     =   os.path.join(directory,'hectomap_property.fits')
     hectomap_property = get_property_all(hectomap, target_healpix, tractlist, patches)
-    if hectomap_property == 0:
+    if hectomap_property.empty:
         print(f"no tract in hectomap field")
     else:
-        hectomap_property.write(hectomap_file, format='fits', overwrite=True)
+        table = Table.from_pandas(hectomap_property)
+        table.write(hectomap_file, format='fits', overwrite=True)
         
     spring_file     =   os.path.join(directory,'spring_property.fits')
     spring_property = get_property_all(spring, target_healpix, tractlist, patches)
-    if spring_property == 0:
+    if spring_property.empty:
         print(f"no tract in spring field")
     else:
-        spring_property.write(spring_file, format='fits', overwrite=True)
+        table = Table.from_pandas(spring_property)
+        table.write(spring_file, format='fits', overwrite=True)
     
     return autumn_property, AEGIS_property, hectomap_property, spring_property
 

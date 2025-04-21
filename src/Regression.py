@@ -7,6 +7,9 @@ import pandas as pd
 from sklearn.metrics import r2_score
 from sklearn.metrics import mean_squared_error
 
+import torch
+from torch.utils.data import TensorDataset, DataLoader
+
 import healpy as hp
 
 import numpy as np
@@ -49,9 +52,14 @@ def linear_weights(property, pixels, keys):
     dataframe with weights of each healpixels
     """
     df = property [property['healpix'].isin(pixels)]
+    df_cleaned = df.dropna(subset=['target'])
+    properties = df_cleaned[keys]
+    
     scaler = StandardScaler()
-    df_standardized = pd.DataFrame(scaler.fit_transform(df), columns= df.columns)
-    density = df_standardized["target"]
+    df_standardized = pd.DataFrame(scaler.fit_transform(properties), columns= properties.columns)
+    
+    mean = np.sum(df_cleaned["target"]*df_cleaned["area"])/np.sum(df_cleaned["area"])
+    density = df_cleaned["target"]/mean
 
     X = np.concatenate([np.array(df_standardized[key]).reshape(-1, 1) for key in keys], axis=1)
 
@@ -83,11 +91,11 @@ def linear_weights(property, pixels, keys):
     print("Test MSE linear:", mse_test)
 
     _density = regr.predict(X)
-    _weight = 1/(_density*np.std(df['target'])/np.average(df['target'])+1)
+    _weight = 1/_density
 
-    df['weights'] = _weight
+    df_cleaned['weights'] = _weight
 
-    return df
+    return df_cleaned
 
 def quadratic_weights(property, pixels, keys):
     """function to calculate weights using quadratic regression
@@ -109,13 +117,17 @@ def quadratic_weights(property, pixels, keys):
     dataframe including imaging systematics and target density "and weights" of each healpixels
     """
     df = property [property['healpix'].isin(pixels)]
+    df_cleaned = df.dropna(subset=['target'])
+    properties = df_cleaned[keys]
+    
     scaler = StandardScaler()
-    df_standardized = pd.DataFrame(scaler.fit_transform(df), columns= df.columns)
-    density = df_standardized["target"]
+    df_standardized = pd.DataFrame(scaler.fit_transform(properties), columns= properties.columns)
+    
+    mean = np.sum(df_cleaned["target"]*df_cleaned["area"])/np.sum(df_cleaned["area"])
+    density = df_cleaned["target"]/mean
 
     X = np.concatenate([np.array(df_standardized[key]).reshape(-1, 1) for key in keys], axis=1)
 
-    # Train-test split
     train_X, test_X, train_Y, test_Y = train_test_split(X, density)
 
     # Transform features to polynomial (degree=2)
@@ -148,11 +160,83 @@ def quadratic_weights(property, pixels, keys):
     print("Test MSE quadratic:", mse_test)
 
     _density = regr.predict(X_poly)
-    _weight = 1/(_density*np.std(df['target'])/np.average(df['target'])+1)
+    _weight = 1/_density
 
-    data = {
-        'healpix' : df['healpix'],
-        'weights' : _weight
-    }
+    df_cleaned['weights'] = _weight
 
-    return pd.DataFrame(data)    
+    return df_cleaned
+
+def nn_weights(property, pixels, keys):
+    """function to calculate the weights using neural network
+
+    Parameters
+    ----------------------------------------------------
+    property:pd dataframe
+    dataframe including imaging systematics and target density of each healpixels
+
+    pixels: list([int])
+    list of healpixel number considered in the weighting
+
+    keys: list([string])
+    list of imaging systematics to consider
+
+    Output
+    -----------------------------------------------------
+    weights: pd dataframe
+    dataframe including imaging systematics and target density "and weights" of each healpixels
+    """
+    df = property [property['healpix'].isin(pixels)]
+    df_cleaned = df.dropna(subset=['target'])
+    properties = df_cleaned[keys]
+    
+    scaler = StandardScaler()
+    df_standardized = pd.DataFrame(scaler.fit_transform(properties), columns= properties.columns)
+    
+    mean = np.sum(df_cleaned["target"]*df_cleaned["area"])/np.sum(df_cleaned["area"])
+    density = df_cleaned["target"]/mean
+
+    X = np.concatenate([np.array(df_standardized[key]).reshape(-1, 1) for key in keys], axis=1)
+
+    train_X, test_X, train_Y, test_Y = train_test_split(X, density)
+    
+    dtype = torch.float
+    X = torch.from_numpy(train_X).type(dtype)
+    Y = torch.from_numpy(train_Y).type(dtype)
+    Y = Y.view(-1, 1)
+    
+    # Create a data loader with batch size of 4.
+    dataset = TensorDataset(X, Y)
+    loader = DataLoader(dataset, batch_size=4, shuffle=True)
+
+    loss_list = []
+
+    # Two-layer NN: 2 -> 4 -> 1
+    model = torch.nn.Sequential(
+        torch.nn.Linear(3, 6, bias=True),
+        torch.nn.ReLU(),
+        torch.nn.Linear(6, 1, bias=True),
+    )
+    loss_fn = torch.nn.MSELoss()
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+
+    for t in range(5000):
+        for x, y in loader:
+            y_hat = model(x)
+            loss = loss_fn(y_hat, y)
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+        
+        with torch.no_grad():
+            y_hat_all = model(X)
+            loss_epoch = loss_fn(y_hat_all, Y).item()
+            loss_list.append(loss_epoch)
+            
+    density = y_hat_all.numpy().reshape(1, -1)
+    _weight = 1/density
+    df_cleaned['weights'] = _weight
+    return df_cleaned
+    
+    
+    
