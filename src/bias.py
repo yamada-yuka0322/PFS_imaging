@@ -15,13 +15,13 @@ from Loader import *
 
 field = ['AEGIS', 'autumn', 'hectomap', 'spring']
 stardict = {'star_default':'star'}
-
+#stardict = {}
 property_name = ['gseeing', 'rseeing', 'iseeing', 'zseeing', 'yseeing', 'g_depth', 'r_depth', 'i_depth', 'z_depth', 'y_depth']
 
 args    =   None
 diffver =   '-colorterm'
-datapath = f"/data/PFS/s23{diffver}"
-nside = 1024
+datapath = f"/home/YukaYamada/data/PFS/s23{diffver}"
+nside = 256
 area = hp.nside2pixarea(nside,degrees=True)
 
 class TractPatch(object):
@@ -65,7 +65,7 @@ def load_patch(field):
     
     data = {}
 
-    file_path = f"/PFS_imaging/Field/tracts_patches_W-{field}.txt"
+    file_path = f"/home/YukaYamada/repository/PFS/PFS_imaging/Field/tracts_patches_W-{field}.txt"
     with open(file_path, 'r') as file:
         lines = file.readlines()
     
@@ -107,7 +107,7 @@ def load_patch(field):
 
     return data
 ##############################################################################################################
-def get_property_all(tractpatch, target_healpix, tractlist, patches):
+def get_property_all(tractpatch, target_healpix, tractlist):
     """function to get the properties of healpixels in a single field (AEGIS, autumn, hectomap or spring)
 
     Parameter
@@ -135,8 +135,7 @@ def get_property_all(tractpatch, target_healpix, tractlist, patches):
         return pd.DataFrame()
     else:
         with Pool(processes=20) as pool:  # Adjust number of processes based on your CPU
-            func = partial(get_property_tract, patches=patches)
-            results = pool.map(func, tractlist)
+            results = pool.map(get_property_tract, tractlist)
         
         # Exclude None results
         valid_results = [res for res in results if res is not None]
@@ -168,7 +167,7 @@ def get_property_all(tractpatch, target_healpix, tractlist, patches):
     
     
 
-def get_property_tract(tract, patches):
+def get_property_tract(tract):
     """function to get the property of the healpix within a tract
 
     Parameters
@@ -191,6 +190,8 @@ def get_property_tract(tract, patches):
     dec = random.dec
     patch = random.patch
     mask = random.mask #within mask
+    if ra is None:
+        return None
     
     edges = (ra<np.max(ra) - 0.1)&(ra>np.min(ra) + 0.1)&(dec<np.max(dec) - 0.1)&(dec>np.min(dec) + 0.1)
     ra = ra[edges]
@@ -206,16 +207,26 @@ def get_property_tract(tract, patches):
     _dec = dec[out_mask]
     _patch = patch[out_mask]
     _healpy = healpy[out_mask] #healpix outside the stellar mask
-    print(f"random distribution ra max:{np.max(_ra)} min:{np.min(_ra)}, dec  max:{np.max(_dec)} min:{np.min(_dec)}")
-
-    
-    random_data = pd.DataFrame({'patch':_patch, 'healpix':_healpy})
-    
-    property = patches.get_properties(tract)
-    # Check for empty dataframe
-    if property.empty:
-        # return None if empty
+    #print(f"random distribution ra max:{np.max(_ra)} min:{np.min(_ra)}, dec  max:{np.max(_dec)} min:{np.min(_dec)}")
+    if (len(_patch)>0):
+        if isinstance(_patch, np.ndarray) and _patch.dtype.byteorder == '>':
+            _patch = _patch.astype(_patch.dtype.newbyteorder('='))
+        if isinstance(_healpy, np.ndarray) and _healpy.dtype.byteorder == '>':
+            _healpy = _healpy.astype(_healpy.dtype.newbyteorder('='))
+        random_data = pd.DataFrame({'patch':_patch, 'healpix':_healpy})
+    else:
+        print(f"All observation area of tract {tract} is inside the bright stellar mask")
         return None
+    
+    patches = Patches()
+    patches.load_patches(datapath, property_name, tract)
+    property = patches.property
+    # Check for empty dataframe
+    if property is None:
+        print(f"patch column missing in tract {tract} property")
+        return None
+    else:
+        property['patch'] = patches.patch
 
     properties = pd.merge(random_data, property, on='patch', how='left')
     # take the average of the properties for the random points between all the overlapping patches
@@ -300,7 +311,7 @@ def get_patch_property(patch_id, tract):
     #return result
     
 def add_ext(properties):
-    dustfile = '/pfstarget/src/pfstarget/dat/desi_dust_gr_512.fits'
+    dustfile = '/home/YukaYamada/repository/PFS/pfstarget/src/pfstarget/dat/desi_dust_gr_512.fits'
     with fits.open(dustfile) as hdu:
         data = hdu[1].data
         healpix = data["HPXPIXEL"]
@@ -382,19 +393,30 @@ def add_star_count(properties, stardict, tract):
         ra = star.ra
         dec = star.dec
         
-        edges = (ra<np.max(ra) - 0.1)&(ra>np.min(ra) + 0.1)&(dec<np.max(dec) - 0.1)&(dec>np.min(dec) + 0.1)
-        ra = ra[edges]
-        dec = dec[edges]
+        if ra is None:
+            print(f'No stars in tract {tract}')
+            properties[name] = np.zeros(len(properties['healpix']))
+        else:
+            if (np.max(ra) - np.min(ra) < 180):
+                edges = (ra<np.max(ra) - 0.1)&(ra>np.min(ra) + 0.1)&(dec<np.max(dec) - 0.1)&(dec>np.min(dec) + 0.1)
+            else:
+                dec_edge = (dec<np.max(dec) - 0.1)&(dec>np.min(dec) + 0.1)
+                _ra = ra-360*(ra>180)
+                ra_edge = (_ra<np.max(_ra)-0.1)&(_ra>np.min(_ra) + 0.1)
+                edges = dec_edge & ra_edge
+                
+            ra = ra[edges]
+            dec = dec[edges]
+            
+            healpy = hp.ang2pix(nside=nside, theta=ra, phi=dec, lonlat=True)
         
-        healpy = hp.ang2pix(nside=nside, theta=ra, phi=dec, lonlat=True)
-        
-        _healpy, counts = np.unique(healpy, return_counts=True)
-        data1 = {
-            'healpix':_healpy,
-            name : counts
-        }
-        table1 = pd.DataFrame(data1)
-        properties = pd.merge(properties, table1, on='healpix', how='left')
+            _healpy, counts = np.unique(healpy, return_counts=True)
+            data1 = {
+                'healpix':_healpy,
+                name : counts
+            }
+            table1 = pd.DataFrame(data1)
+            properties = pd.merge(properties, table1, on='healpix', how='left')
     
     return properties
     
@@ -419,8 +441,8 @@ def imaging_bias(object, tractlist = ''):
 ###################################################################    
     #if no tracts, all tract in HSC database will be downloaded
 
-    if (tractlist==''):
-        tractname= 'TractInfoS23.csv'
+    if (type(tractlist) is str):
+        tractname= '/home/YukaYamada/repository/PFS/pfstarget/bin/hsc/sql/TractInfoS23.csv'
         tracts      =   ascii.read(tractname)['tract']
         tractlist = list(tracts)
 
@@ -430,11 +452,7 @@ def imaging_bias(object, tractlist = ''):
     AEGIS = TractPatch("AEGIS")
     hectomap = TractPatch("hectomap")
     spring = TractPatch("spring")
-    
-####################################################################
-    #load entire patch property
-    patches = Patches()
-    patches.load_patches(datapath, property_name)
+    #patches.load_patches(datapath, property_name)
 ####################################################################
     target = object
     target_ra = target["RA"]
@@ -445,11 +463,11 @@ def imaging_bias(object, tractlist = ''):
     target_healpix = hp.pixelfunc.ang2pix(nside=nside, theta=target_ra, phi=target_dec, lonlat=True)
     
     #Get Property for each healpixel
-    directory = '/output/PFS/property'
+    directory = '/home/YukaYamada/output/PFS/property'
     os.makedirs(directory, exist_ok=True)
 
     autumn_file     =   os.path.join(directory,'autumn_property.fits')
-    autumn_property = get_property_all(autumn, target_healpix, tractlist, patches)
+    autumn_property = get_property_all(autumn, target_healpix, tractlist)
     if autumn_property.empty:
         print(f"no tract in autumn field")
     else:
@@ -457,7 +475,7 @@ def imaging_bias(object, tractlist = ''):
         table.write(autumn_file, format='fits', overwrite=True)
 
     AEGIS_file     =   os.path.join(directory,'AEGIS_property.fits')
-    AEGIS_property = get_property_all(AEGIS, target_healpix, tractlist, patches)
+    AEGIS_property = get_property_all(AEGIS, target_healpix, tractlist)
     if AEGIS_property.empty:
         print(f"no tract in AEGIS field")
     else:
@@ -465,7 +483,7 @@ def imaging_bias(object, tractlist = ''):
         table.write(AEGIS_file, format='fits', overwrite=True)
         
     hectomap_file     =   os.path.join(directory,'hectomap_property.fits')
-    hectomap_property = get_property_all(hectomap, target_healpix, tractlist, patches)
+    hectomap_property = get_property_all(hectomap, target_healpix, tractlist)
     if hectomap_property.empty:
         print(f"no tract in hectomap field")
     else:
@@ -473,7 +491,7 @@ def imaging_bias(object, tractlist = ''):
         table.write(hectomap_file, format='fits', overwrite=True)
         
     spring_file     =   os.path.join(directory,'spring_property.fits')
-    spring_property = get_property_all(spring, target_healpix, tractlist, patches)
+    spring_property = get_property_all(spring, target_healpix, tractlist)
     if spring_property.empty:
         print(f"no tract in spring field")
     else:

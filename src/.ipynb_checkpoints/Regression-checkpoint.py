@@ -97,15 +97,9 @@ def linear_weights(property, pixels, keys):
     _density = regr.predict(X)
     _weight = 1/_density
 
-    df_cleaned['lin_weights'] = _weight
-    
-    # property weights (= regression coefficients)
-    coef_df = pd.DataFrame({
-        "property": keys,
-        "coefficient": regr.coef_
-    })
+    df_cleaned['weights'] = _weight
 
-    return df_cleaned, coef_df
+    return df_cleaned
 
 def quadratic_weights(property, pixels, keys):
     """function to calculate weights using quadratic regression
@@ -172,56 +166,8 @@ def quadratic_weights(property, pixels, keys):
     _density = regr.predict(X_poly)
     _weight = 1/_density
 
-    df_cleaned['quad_weights'] = _weight
+    df_cleaned['weights'] = _weight
 
-    return df_cleaned
-
-def nn_weights(property, pixels, keys):
-    """function to calculate weights using quadratic regression
-
-    Parameters
-    ----------------------------------------------------
-    property:pd dataframe
-    dataframe including imaging systematics and target density of each healpixels
-
-    pixels: list([int])
-    list of healpixel number considered in the weighting
-
-    keys: list([string])
-    list of imaging systematics to consider
-
-    Output
-    -----------------------------------------------------
-    weights: pd dataframe
-    dataframe including imaging systematics and target density "and weights" of each healpixels
-    """
-    params={'lr': 7.394509408202555e-06, 'depth': 2, 'width': 1024}
-    width = params['width']               # Optunaで選ばれたbestのwidth
-    depth = params['depth']             # Optunaで選ばれたbestのdepth
-
-    # build_modelは既存の関数を利用（入力次元は len(keys) ）
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model = build_model(12, width, depth)  # build_modelは前と同じ関数
-    model.load_state_dict(torch.load("/home/YukaYamada/repository/PFS/notebook/output/best_model_1.pt"))
-    model.eval()
-        
-    df = property [property['healpix'].isin(pixels)]
-    df_cleaned = df.dropna(subset=['target'])
-    properties = df_cleaned[keys]
-    scaler = StandardScaler()
-    df_standardized = pd.DataFrame(scaler.fit_transform(properties), columns= properties.columns)
-
-    X = np.concatenate([np.array(df_standardized[key]).reshape(-1, 1) for key in keys], axis=1)
-
-    with torch.no_grad():
-        X_tensor = torch.from_numpy(X).float().to(device)
-        pred = model(X_tensor).squeeze().detach().cpu().numpy()
-
-    # 密度 → 重み（ゼロ割/負値はクリップ）
-    density = np.clip(pred, 1e-6, None)
-    w_nn = 1.0 / density
-    df_cleaned['nn_weights'] = w_nn
-    
     return df_cleaned
 
 class CustomLoss(nn.Module):
@@ -240,7 +186,7 @@ class CustomLoss(nn.Module):
 
 
 
-def _nn_weights(property, pixels, keys):
+def nn_weights(property, pixels, keys):
     """function to calculate the weights using neural network
 
     Parameters
@@ -348,117 +294,59 @@ def _nn_weights(property, pixels, keys):
     df_cleaned['weights'] = _weight.flatten()
     return df_cleaned
 
-def build_model(input_dim, width, depth):
-    layers = [nn.Linear(input_dim, width), nn.BatchNorm1d(width), nn.ReLU()]
-    for _ in range(depth - 1):
-        layers += [nn.Linear(width, width), nn.BatchNorm1d(width), nn.ReLU()]
-    layers += [nn.Linear(width, 1)]
-    return nn.Sequential(*layers)
+def objective(trial, property, pixels, keys):
+    # ハイパーパラメータをサンプリング
+    hidden_dim1 = trial.suggest_int('hidden_dim1', 4, 64)
+    hidden_dim2 = trial.suggest_int('hidden_dim2', 2, 32)
+    lr = trial.suggest_loguniform('lr', 1e-5, 1e-2)
+    batch_size = trial.suggest_categorical('batch_size', [64, 128, 256, 512])
+    lambda_reg = trial.suggest_loguniform('lambda_reg', 1e-6, 1e-2)
 
-def make_objective(test_X, test_Y, test_Fpix, val_X, val_Y, val_Fpix, loader):
-    def objective(trial):
-        # ハイパーパラメータの提案
-        lr = trial.suggest_float("lr", 1e-6, 1e-3, log=True)
-        depth = trial.suggest_int("depth", 2, 6)
-        width = trial.suggest_categorical("width", [64, 128, 256, 512, 1024])
+    # モデルと損失関数の定義
+    model = torch.nn.Sequential(
+        torch.nn.Linear(X.shape[1], hidden_dim1),
+        torch.nn.BatchNorm1d(hidden_dim1),
+        torch.nn.ReLU(),
+        torch.nn.Linear(hidden_dim1, hidden_dim2),
+        torch.nn.BatchNorm1d(hidden_dim2),
+        torch.nn.ReLU(),
+        torch.nn.Linear(hidden_dim2, 1)
+    )
 
-        model = build_model(12, width, depth)
-        loss_fn = CustomLoss(model, lambda_reg=1e-3)
-        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    loss_fn = _CustomLoss(model, lambda_reg=lambda_reg)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
-        best_val_loss = float("inf")
-        patience = 20
-        trigger_times = 0
-        best_model = copy.deepcopy(model)
-        
-        epoch = []
-        loss_list = []
+    dataset = TensorDataset(train_X, train_Y, train_Fpix)
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
-        for t in range(300):
-            model.train()
-            for _x, _y, _fpix in loader:
-                y_hat = model(_x)
-                loss = loss_fn(y_hat, _y, _fpix)
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
+    best_val_loss = float('inf')
+    trigger_times = 0
+    patience = 20
 
-            model.eval()
-            with torch.no_grad():
-                val_pred = model(val_X)
-                val_loss = loss_fn(val_pred, val_Y, val_Fpix).item()
-                test_pred = model(test_X)
-                test_loss = loss_fn(test_pred, test_Y, test_Fpix).item()
-                loss_list.append(test_loss)
-                epoch.append(t)
+    for t in range(300):  # epoch数を少し減らしておく
+        model.train()
+        for _x, _y, _fpix in loader:
+            y_hat = model(_x)
+            loss = loss_fn(y_hat, _y, _fpix)
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+        model.eval()
+        with torch.no_grad():
+            val_pred = model(test_X)
+            val_loss = loss_fn(val_pred, test_Y, test_Fpix).item()
 
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 trigger_times = 0
-                best_model = copy.deepcopy(model)
             else:
                 trigger_times += 1
                 if trigger_times >= patience:
                     break
 
-        # モデル保存
-        #model_path = f"/home/YukaYamada/repository/PFS/notebook//output/model_trial_{trial.number}.pt"
-        #torch.save(best_model.state_dict(), model_path)
-        trial.set_user_attr("best_state_dict", best_model.state_dict())
+    return best_val_loss
 
-
-        return best_val_loss
-
-    return objective
-
-def run_optuna_nn(property_df, pixels, keys):
-    df = property_df[property_df['healpix'].isin(pixels)]
-    df_cleaned = df.dropna(subset=['target'])
-    properties = df_cleaned[keys]
-
-    scaler = StandardScaler()
-    df_standardized = pd.DataFrame(scaler.fit_transform(properties), columns=properties.columns)
-
-    mean = np.sum(df_cleaned["target"] * df_cleaned["area"]) / np.sum(df_cleaned["area"])
-    density = df_cleaned["target"] / mean
-
-    nside = 256
-    area = hp.nside2pixarea(nside, degrees=True)
-    fpix = df_cleaned["area"] / area
-
-    X = np.stack([df_standardized[key].values for key in keys], axis=1)
-
-    train_X_np, temp_X_np, train_Y_np, temp_Y_np, train_fpix_np, temp_fpix_np = train_test_split(
-        X, density, fpix, test_size=0.2, random_state=42)
-    val_X_np, test_X_np, val_Y_np, test_Y_np, val_fpix_np, test_fpix_np = train_test_split(
-        temp_X_np, temp_Y_np, temp_fpix_np, test_size=0.5, random_state=42)
-
-    dtype = torch.float
-    train_X = torch.from_numpy(train_X_np).type(dtype)
-    train_Y = torch.from_numpy(train_Y_np.values).type(dtype).view(-1, 1)
-    train_Fpix = torch.from_numpy(train_fpix_np.values).type(dtype)
-
-    val_X = torch.from_numpy(val_X_np).type(dtype)
-    val_Y = torch.from_numpy(val_Y_np.values).type(dtype).view(-1, 1)
-    val_Fpix = torch.from_numpy(val_fpix_np.values).type(dtype)
     
-    test_X = torch.from_numpy(val_X_np).type(dtype)
-    test_Y = torch.from_numpy(val_Y_np.values).type(dtype).view(-1, 1)
-    test_Fpix = torch.from_numpy(val_fpix_np.values).type(dtype)
-
-    dataset = TensorDataset(train_X, train_Y, train_Fpix)
-    loader = DataLoader(dataset, batch_size=128, shuffle=True)
-
-    objective = make_objective(test_X, test_Y, test_Fpix, val_X, val_Y, val_Fpix, loader)
-    study = optuna.create_study(direction="minimize")
-    study.optimize(objective, n_trials=200)
     
-    best_params = study.best_trial.params
-    best_state_dict = study.best_trial.user_attrs["best_state_dict"]
-
-    # 同じ構造で再構築して保存
-    model = build_model(input_dim=X.shape[1], width=best_params["width"], depth=best_params["depth"])
-    model.load_state_dict(best_state_dict)
-    torch.save(model.state_dict(), "/home/YukaYamada/repository/PFS/notebook/output/best_model.pt")
-
-    return study
