@@ -11,13 +11,13 @@ from matplotlib.colors import ListedColormap
 from joblib import load as joblib_load
 import torch
 
-filename = '/home/YukaYamada/output/PFS/property/autumn_property.fits'
-autumn = Table.read(filename)
+#filename = '/home/YukaYamada/output/PFS/property/autumn_property.fits'
+#autumn = Table.read(filename)
 
-filename = '/home/YukaYamada/output/PFS/property/spring_property.fits'
-spring = Table.read(filename)
+#filename = '/home/YukaYamada/output/PFS/property/spring_property.fits'
+#spring = Table.read(filename)
 
-def mask_edge():
+def mask_edge(autumn, spring):
     # Healpix pixel centers
     nside = 256
     ra, dec = hp.pix2ang(nside, spring['healpix'], lonlat=True)
@@ -83,7 +83,8 @@ def jackknife(autumn, spring, figure=False):
     autumn: pandas dataframe
     spring: pandas dataframe
     """
-    autumn_df = autumn.dropna(subset=['target'])
+    autumn_df = autumn.copy()
+    #autumn_df = autumn.dropna(subset=['target'])
     ra, dec = hp.pix2ang(nside=256, ipix = autumn_df['healpix'], lonlat=True)
     ra = ra-360*(ra>300)
     
@@ -95,7 +96,8 @@ def jackknife(autumn, spring, figure=False):
     array[(ra>25)&(dec<-1)] = 8
     autumn_df['jackknife'] = array
 
-    spring_df = spring.dropna(subset=['target'])
+    #spring_df = spring.dropna(subset=['target'])
+    spring_df = spring.copy()
     ra, dec = hp.pix2ang(nside=256, ipix = spring_df['healpix'], lonlat=True)
     
     array = np.ones(len(ra))
@@ -197,6 +199,7 @@ def jackknife_ang_ratio(
     """
 
     # ---- 0) Aggregate to unique healpix (area-weighted) to avoid duplicates ----
+    df = df.dropna()
     if df['healpix'].duplicated().any():
         g = df.groupby('healpix', as_index=False)
         agg = g.apply(lambda d: pd.Series({
@@ -346,44 +349,50 @@ def jackknife_ang_ratio(
     return bin_centers, est_full, jk_std
 
 ########################################################################
-def jackknife_dens(df, key, target_col, mean_density, n_jack=20, bins=10):
+def jackknife_dens(df, key, target_col, mean_density, n_jack=20, bins=10, min_count=50):
+    jacks = np.unique(df['jackknife'])
+    n_jack = len(jacks)
     df = df.copy()
     df['jackknife_block'] = np.random.randint(0, n_jack, size=len(df))
 
-    # bin を最初に固定する
+    # bin エッジを固定
     _, fixed_bins = np.histogram(df[key], bins=bins)
     bin_centers = (fixed_bins[:-1] + fixed_bins[1:]) / 2.0
+    df[f'{key}_bin'] = pd.cut(df[key], bins=fixed_bins)
 
+    def weighted_mean_rel(x):
+        # 有効データ（target と area の両方が有限）だけを使う
+        m = x[target_col].notna() & np.isfinite(x[target_col]) & x['area'].notna() & np.isfinite(x['area'])
+        if not np.any(m):
+            return pd.Series({'count': 0, 'mean': np.nan})
+        area_sum = np.sum(x.loc[m, 'area'])
+        if area_sum == 0:
+            return pd.Series({'count': int(m.sum()), 'mean': np.nan})
+        mu = np.sum(x.loc[m, target_col] * x.loc[m, 'area']) / area_sum
+        return pd.Series({'count': int(m.sum()), 'mean': mu / mean_density - 1.0})
+
+    # 全データでのサマリー（binごと）
+    summary = df.groupby(f'{key}_bin').apply(weighted_mean_rel).reset_index()
+
+    # ジャックナイフ：各LOOでのmean（binごと）
     means_all = []
-    
-    df[key + '_bin'] = pd.cut(df[key], bins=fixed_bins)
-
-
-    summary = df.groupby(key + '_bin').apply(lambda x: pd.Series({
-        'count': len(x[target_col]),
-        'mean': np.sum(x[target_col] * x['area']) / np.sum(x['area']) / mean_density - 1.0,
-        
-        })).reset_index()
-
-    for i in range(n_jack):
+    for i in jacks:
         jack_df = df[df['jackknife_block'] != i].copy()
-        jack_df[key + '_bin'] = pd.cut(jack_df[key], bins=fixed_bins)
-
-        def stats(x):
-            area_sum = np.sum(x['area'])
-            if area_sum == 0:
-                return pd.Series({'mean': np.nan})
-            mu = np.sum(x[target_col] * x['area']) / area_sum
-            return pd.Series({'mean': mu / mean_density - 1.0})
-
-        _summary = jack_df.groupby(key + '_bin').apply(stats).reset_index()
+        # 既に bin 列はあるが、念のため同じ境界で再カットしてもOK
+        jack_df[f'{key}_bin'] = pd.cut(jack_df[key], bins=fixed_bins)
+        _summary = jack_df.groupby(f'{key}_bin').apply(lambda x: weighted_mean_rel(x)[['mean']]).reset_index()
         means_all.append(_summary['mean'].values)
 
-    means_all = np.array(means_all)
-    mean_estimate = np.nanmean(means_all, axis=0)
-    jk_std = np.sqrt((n_jack - 1) * np.nanmean((means_all - np.array(summary['mean'])[None, :])**2, axis=0))
+    means_all = np.array(means_all)  # shape: (n_jack, n_bins)
+    theta_bar = np.nanmean(means_all, axis=0)  # LOO平均の平均
+    # JK 標準偏差（(n-1)/n * Σ(θ_i - θ̄)^2 の平方根）
+    jk_var = (n_jack - 1) / n_jack * np.nanmean((means_all - theta_bar[None, :])**2, axis=0)
+    jk_std = np.sqrt(jk_var)
 
-    return bin_centers[summary['count']>50], summary['mean'][summary['count']>50], jk_std[summary['count']>50]
+    # サンプル数でフィルタ（有効データ数ベース）
+    mask = summary['count'] >= min_count
+
+    return bin_centers[mask.values], summary.loc[mask, 'mean'].values, jk_std[mask.values]
 
 #################################################################################################################
 def jackknife_PS(df, key, mean_density, target_col, n_jack=20):
@@ -404,6 +413,8 @@ def jackknife_PS(df, key, mean_density, target_col, n_jack=20):
         'delta_i':delta_i,
         'jackknife':df['jackknife']
     })
+    
+    data = data.dropna()
     
     full_data = pd.merge(full, data, on='healpix', how='left')
     

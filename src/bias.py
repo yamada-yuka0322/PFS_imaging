@@ -107,7 +107,7 @@ def load_patch(field):
 
     return data
 ##############################################################################################################
-def get_property_all(tractpatch, target_healpix, tractlist):
+def get_property_all(tractpatch, tractlist, dustmap):
     """function to get the properties of healpixels in a single field (AEGIS, autumn, hectomap or spring)
 
     Parameter
@@ -135,7 +135,8 @@ def get_property_all(tractpatch, target_healpix, tractlist):
         return pd.DataFrame()
     else:
         with Pool(processes=20) as pool:  # Adjust number of processes based on your CPU
-            results = pool.map(get_property_tract, tractlist)
+            func = partial(get_property_tract, dustmap=dustmap)
+            results = pool.map(func, tractlist)
         
         # Exclude None results
         valid_results = [res for res in results if res is not None]
@@ -145,21 +146,11 @@ def get_property_all(tractpatch, target_healpix, tractlist):
 
             #When healpixels are overlapping between different tracts, take the averaage weighted by the effective overlapping area for all of the tracts 
             stars = list(stardict.values())
-            all_columns = property_name + ['extinction']
+            all_columns = property_name + [dust+'_extinction' for dust in dustmap]
             property = all_property.groupby('healpix').apply(lambda x: pd.Series(
                 {col: np.sum(x[col] * x['Mask']) / np.sum(x['Mask']) for col in all_columns} |  # Seeing, depth, extinction
                 {'area': np.sum(x['Mask']) / np.sum(x['counts']) * area}|
                 {col: np.sum(x[col])/area for col in stars})).reset_index()
-
-            u, counts = np.unique(target_healpix, return_counts=True)
-            data1 = pd.DataFrame({
-                'healpix':u,
-                'target':counts
-            })
-
-            property = pd.merge(property, data1, on='healpix', how='left')
-            property['target'] = property['target']/property['area']
-
             return property
         else:
             # return table if empty
@@ -167,7 +158,7 @@ def get_property_all(tractpatch, target_healpix, tractlist):
     
     
 
-def get_property_tract(tract):
+def get_property_tract(tract, dustmap):
     """function to get the property of the healpix within a tract
 
     Parameters
@@ -251,78 +242,63 @@ def get_property_tract(tract):
     properties = pd.merge(properties, table1, on='healpix', how='left')
     
     #properties = add_eff_area(mask, properties)
-    properties = add_ext(properties)
+    for dust in dustmap:
+        properties = add_ext(properties, dust)
     #############star file name
     properties = add_star_count(properties, stardict, tract)
     return properties
-
-def get_patch_property(patch_id, tract):
-    """function to connect the path_id with the patch properties
-
-    Parameters
-    ------------------------------------------------------
-    patch_id:array
-    array of the patch id array([508,706,102,108,8,700,601,...)
-
-    tract:int
-    tract number of the tract considered
-
-    Output
-    -------------
-    result:dataframes
-    {patch:patch_id, 
-    gseeing: gseeing from patch_sql , 
-    rseeing: rseeing from patch_sql ,
-    iseeing: iseeing from patch_sql ,
-    zseeing: zseeing from patch_sql ,
-    yseeing: yseeing from patch_sql ,
-    g_depth: g_depth from patch_sql ,
-    r_depth: r_depth from patch_sql ,
-    i_depth: i_depth from patch_sql ,
-    z_depth: z_depth from patch_sql ,
-    y_depth: y_depth from patch_sql }
-    """
-    patch_sql = args.patch_sql
-    name = patch_sql[0].split('.')[0]
-    prefix2 = f'database/{name}/tracts_{name}'
-    filename = os.path.join(prefix2,'%s_bias.fits' %(tract))
-    # Read imaging properties of each patch
-    if os.path.exists(filename):
-        with fits.open(filename) as hdu:
+    
+def add_ext(properties, dust):
+    if dust=='desi':
+        dustfile = '../PFS/pfstarget/src/pfstarget/dat/desi_dust_gr_512.fits'
+        with fits.open(dustfile) as hdu:
             data = hdu[1].data
-            df = pd.DataFrame(data)
-            df = df.apply(lambda col: col.values.byteswap().newbyteorder() if col.dtype.byteorder == '>' else col)
-            #patch_id of randomly distributed points
-            patch_df = pd.DataFrame({'patch': patch_id})
-
-            result = pd.merge(patch_df, df, on='patch', how='left')
-
+            healpix = data["HPXPIXEL"]
+            EBV = data["EBV_GR"]
+        
+        npix = hp.nside2npix(512)
+        ebv_map = np.zeros(npix, dtype=np.float32)
+    
+        ebv_map[healpix] = EBV
+        ebv = hp.ud_grade(ebv_map, nside)
+        properties['desi_extinction'] = ebv[properties['healpix']]
+    
+    elif dust=='desi-csfd':
+        filename = "/lustre/work/jingjing.shi/pfs_co_fa/data_raw/dustmaps/CSFD_DESI_merged_dust_map_NS2048_ring.fits"
+        hdul = fits.open(filename)
+        df_csfd_desi = hdul[1].data
+    
+        _nside = hp.get_nside(df_csfd_desi['EBV_CSFD_DESI_merged_at_1deg'])
+        ind_galactic = np.arange(hp.get_map_size(df_csfd_desi['EBV_CSFD_DESI_merged_at_1deg']))
+        theta_galactic, phi_galactic = hp.pix2ang(_nside, ind_galactic)
+        r = hp.Rotator(coord=["C", "G"])
+        theta_equatorial, phi_equatorial = r(theta_galactic, phi_galactic)
+        ind_equatorial = hp.ang2pix(_nside, theta_equatorial, phi_equatorial)
+        
+        ebv_map = df_csfd_desi['EBV_CSFD_DESI_merged_at_1deg'][ind_equatorial]
+        ebv = hp.ud_grade(ebv_map, nside)
+        properties['desi-csfd_extinction'] = ebv[properties['healpix']]
+        hdul.close()
+        
+    elif dust=='csfd':
+        filename = "/lustre/work/jingjing.shi/pfs_co_fa/data_raw/dustmaps/CSFD_DESI_merged_dust_map_NS2048_ring.fits"
+        hdul = fits.open(filename)
+        df_csfd_desi = hdul[1].data
+    
+        _nside = hp.get_nside(df_csfd_desi['EBV_CSFD'])
+        ind_galactic = np.arange(hp.get_map_size(df_csfd_desi['EBV_CSFD']))
+        theta_galactic, phi_galactic = hp.pix2ang(_nside, ind_galactic)
+        r = hp.Rotator(coord=["C", "G"])
+        theta_equatorial, phi_equatorial = r(theta_galactic, phi_galactic)
+        ind_equatorial = hp.ang2pix(_nside, theta_equatorial, phi_equatorial)
+        
+        ebv_map = df_csfd_desi['EBV_CSFD'][ind_equatorial]
+        ebv = hp.ud_grade(ebv_map, nside)
+        properties['csfd_extinction'] = ebv[properties['healpix']]
+        hdul.close()
+        
     else:
-        print(f'No observation in tract {tract}')
-        result = pd.DataFrame(columns=['patch'])
-
-        
-    
-    return result
-
-#def add_eff_area(properties):
-    
-    #result = pd.merge(table1, properties, on='healpix', how='inner')
-    #return result
-    
-def add_ext(properties):
-    dustfile = '/home/YukaYamada/repository/PFS/pfstarget/src/pfstarget/dat/desi_dust_gr_512.fits'
-    with fits.open(dustfile) as hdu:
-        data = hdu[1].data
-        healpix = data["HPXPIXEL"]
-        EBV = data["EBV_GR"]
-        
-    npix = hp.nside2npix(512)
-    ebv_map = np.zeros(npix, dtype=np.float32)
-    
-    ebv_map[healpix] = EBV
-    ebv = hp.ud_grade(ebv_map, nside)
-    properties['extinction'] = ebv[properties['healpix']]
+        print(f'No dust file corresponding to {dust}')
     
     return properties
     
@@ -421,7 +397,7 @@ def add_star_count(properties, stardict, tract):
     return properties
     
 ###########################################################################################################
-def imaging_bias(object, tractlist = ''):
+def imaging_bias(tractlist = '', dustmaps = ['desi'], directory='../property/', savename=''):
     """function to calculate the imaging systematics and target density for each healpixel
 
     Parameters
@@ -442,7 +418,7 @@ def imaging_bias(object, tractlist = ''):
     #if no tracts, all tract in HSC database will be downloaded
 
     if (type(tractlist) is str):
-        tractname= '/home/YukaYamada/repository/PFS/pfstarget/bin/hsc/sql/TractInfoS23.csv'
+        tractname= '../PFS/pfstarget/bin/hsc/sql/TractInfoS23.csv'
         tracts      =   ascii.read(tractname)['tract']
         tractlist = list(tracts)
 
@@ -454,50 +430,61 @@ def imaging_bias(object, tractlist = ''):
     spring = TractPatch("spring")
     #patches.load_patches(datapath, property_name)
 ####################################################################
-    target = object
-    target_ra = target["RA"]
-    target_dec = target["DEC"]
-    
-    print(f"target distribution ra max:{np.max(target_ra)} min:{np.min(target_ra)}, dec  max:{np.max(target_dec)} min:{np.min(target_dec)}")
-    
-    target_healpix = hp.pixelfunc.ang2pix(nside=nside, theta=target_ra, phi=target_dec, lonlat=True)
-    
     #Get Property for each healpixel
-    directory = '/home/YukaYamada/output/PFS/property'
     os.makedirs(directory, exist_ok=True)
 
-    autumn_file     =   os.path.join(directory,'autumn_property.fits')
-    autumn_property = get_property_all(autumn, target_healpix, tractlist)
+    autumn_file     =   os.path.join(directory,f'autumn_property{savename}.fits')
+    autumn_property = get_property_all(autumn, tractlist, dustmaps)
     if autumn_property.empty:
         print(f"no tract in autumn field")
     else:
         table = Table.from_pandas(autumn_property)
         table.write(autumn_file, format='fits', overwrite=True)
 
-    AEGIS_file     =   os.path.join(directory,'AEGIS_property.fits')
-    AEGIS_property = get_property_all(AEGIS, target_healpix, tractlist)
-    if AEGIS_property.empty:
-        print(f"no tract in AEGIS field")
-    else:
-        table = Table.from_pandas(AEGIS_property)
-        table.write(AEGIS_file, format='fits', overwrite=True)
+    #AEGIS_file     =   os.path.join(directory,'AEGIS_property_desi-csfd_dust.fits')
+    #AEGIS_property = get_property_all(AEGIS, target_healpix, tractlist)
+    #if AEGIS_property.empty:
+        #print(f"no tract in AEGIS field")
+    #else:
+        #table = Table.from_pandas(AEGIS_property)
+        #table.write(AEGIS_file, format='fits', overwrite=True)
         
-    hectomap_file     =   os.path.join(directory,'hectomap_property.fits')
-    hectomap_property = get_property_all(hectomap, target_healpix, tractlist)
-    if hectomap_property.empty:
-        print(f"no tract in hectomap field")
-    else:
-        table = Table.from_pandas(hectomap_property)
-        table.write(hectomap_file, format='fits', overwrite=True)
+    #hectomap_file     =   os.path.join(directory,'hectomap_property_desi_dust.fits')
+    #hectomap_property = get_property_all(hectomap, target_healpix, tractlist)
+    #if hectomap_property.empty:
+        #print(f"no tract in hectomap field")
+    #else:
+        #table = Table.from_pandas(hectomap_property)
+        #table.write(hectomap_file, format='fits', overwrite=True)
         
-    spring_file     =   os.path.join(directory,'spring_property.fits')
-    spring_property = get_property_all(spring, target_healpix, tractlist)
+    spring_file     =   os.path.join(directory,f'spring_property{savename}.fits')
+    spring_property = get_property_all(spring, tractlist, dustmaps)
     if spring_property.empty:
         print(f"no tract in spring field")
     else:
         table = Table.from_pandas(spring_property)
         table.write(spring_file, format='fits', overwrite=True)
     
-    return autumn_property, AEGIS_property, hectomap_property, spring_property
+    #return autumn_property, AEGIS_property, hectomap_property, spring_property
+    return autumn_property, spring_property
 
 ######################################################################
+
+def get_target_density(targets, Property, name = 'target'):
+    if ('area' in Property.columns) and ('healpix' in Property.columns):
+        target_ra = targets['RA']
+        target_dec = targets['DEC']
+        healpix = hp.ang2pix(nside, target_ra, target_dec, nest=False, lonlat=True)
+        
+        # count the number of galaxies in each healpix
+        _healpy, counts = np.unique(healpix, return_counts=True)
+        data1 = pd.DataFrame({'healpix':_healpy, name : counts})
+        
+        merged = pd.merge(Property, data1, on='healpix', how='left')
+        merged = merged.fillna({name: 0})
+        merged[name] /= merged['area']
+        return merged
+    else:
+        print('No area or healpix column in given data')
+        return Property
+        

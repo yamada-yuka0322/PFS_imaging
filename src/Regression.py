@@ -17,8 +17,14 @@ import healpy as hp
 
 import numpy as np
 
+import os, json, copy
+from datetime import datetime
+
 nside = 256
 area = hp.nside2pixarea(nside,degrees=True)
+
+SAVE_DIR = "/home/YukaYamada/repository/PFS/notebook/output/optuna_runs"  # 保存先
+os.makedirs(SAVE_DIR, exist_ok=True)
 
 def target_weights(object, selection, properties):
     targets = object[selection]
@@ -195,14 +201,15 @@ def nn_weights(property, pixels, keys):
     weights: pd dataframe
     dataframe including imaging systematics and target density "and weights" of each healpixels
     """
-    params={'lr': 7.394509408202555e-06, 'depth': 2, 'width': 1024}
-    width = params['width']               # Optunaで選ばれたbestのwidth
-    depth = params['depth']             # Optunaで選ばれたbestのdepth
+    #params={'lr': 7.394509408202555e-06, 'depth': 2, 'width': 1024}
+    #width = params['width']               # Optunaで選ばれたbestのwidth
+    #depth = params['depth']             # Optunaで選ばれたbestのdepth
 
     # build_modelは既存の関数を利用（入力次元は len(keys) ）
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model = build_model(12, width, depth)  # build_modelは前と同じ関数
-    model.load_state_dict(torch.load("/home/YukaYamada/repository/PFS/notebook/output/best_model_1.pt"))
+    checkpoint = torch.load("/home/YukaYamada/repository/PFS/notebook/output/optuna_runs/logstar_study_2025-10-09_19-15-16/best_model_logstar.pt")
+    model = build_model(**checkpoint["config"])
+    model.load_state_dict(checkpoint["state_dict"])
     model.eval()
         
     df = property [property['healpix'].isin(pixels)]
@@ -218,8 +225,9 @@ def nn_weights(property, pixels, keys):
         pred = model(X_tensor).squeeze().detach().cpu().numpy()
 
     # 密度 → 重み（ゼロ割/負値はクリップ）
-    density = np.clip(pred, 1e-6, None)
-    w_nn = 1.0 / density
+    #density = np.clip(pred, 1e-6, None)
+    density = pred
+    w_nn = np.where(density <= 0, np.nan, 1.0 / density)
     df_cleaned['nn_weights'] = w_nn
     
     return df_cleaned
@@ -356,7 +364,7 @@ def build_model(input_dim, width, depth):
     return nn.Sequential(*layers)
 
 def make_objective(test_X, test_Y, test_Fpix, val_X, val_Y, val_Fpix, loader):
-    def objective(trial):
+    def objective(trial: optuna.trial.Trial):
         # ハイパーパラメータの提案
         lr = trial.suggest_float("lr", 1e-6, 1e-3, log=True)
         depth = trial.suggest_int("depth", 2, 6)
@@ -370,11 +378,12 @@ def make_objective(test_X, test_Y, test_Fpix, val_X, val_Y, val_Fpix, loader):
         patience = 20
         trigger_times = 0
         best_model = copy.deepcopy(model)
+        EPOCHS = 300
         
         epoch = []
         loss_list = []
 
-        for t in range(300):
+        for t in range(EPOCHS):
             model.train()
             for _x, _y, _fpix in loader:
                 y_hat = model(_x)
@@ -387,31 +396,31 @@ def make_objective(test_X, test_Y, test_Fpix, val_X, val_Y, val_Fpix, loader):
             with torch.no_grad():
                 val_pred = model(val_X)
                 val_loss = loss_fn(val_pred, val_Y, val_Fpix).item()
-                test_pred = model(test_X)
-                test_loss = loss_fn(test_pred, test_Y, test_Fpix).item()
-                loss_list.append(test_loss)
-                epoch.append(t)
 
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
+                test_pred = model(test_X)
+                test_loss = loss_fn(test_pred, test_Y, test_Fpix).item()
                 trigger_times = 0
                 best_model = copy.deepcopy(model)
+                best_sd = copy.deepcopy(model.state_dict())
             else:
                 trigger_times += 1
                 if trigger_times >= patience:
                     break
 
-        # モデル保存
-        #model_path = f"/home/YukaYamada/repository/PFS/notebook//output/model_trial_{trial.number}.pt"
-        #torch.save(best_model.state_dict(), model_path)
-        trial.set_user_attr("best_state_dict", best_model.state_dict())
+        # trial に保存（あとで一括保存する）
+        trial.set_user_attr("state_dict", best_sd)
+        trial.set_user_attr("val_loss", float(best_val_loss))
+        trial.set_user_attr("test_loss", float(test_loss))
+        trial.set_user_attr("epochs", EPOCHS)
 
 
         return best_val_loss
 
     return objective
 
-def run_optuna_nn(property_df, pixels, keys):
+def run_optuna_nn(property_df, pixels, keys, n_trials=200, top_k=5, tag="logstar"):
     df = property_df[property_df['healpix'].isin(pixels)]
     df_cleaned = df.dropna(subset=['target'])
     properties = df_cleaned[keys]
@@ -442,23 +451,86 @@ def run_optuna_nn(property_df, pixels, keys):
     val_Y = torch.from_numpy(val_Y_np.values).type(dtype).view(-1, 1)
     val_Fpix = torch.from_numpy(val_fpix_np.values).type(dtype)
     
-    test_X = torch.from_numpy(val_X_np).type(dtype)
-    test_Y = torch.from_numpy(val_Y_np.values).type(dtype).view(-1, 1)
-    test_Fpix = torch.from_numpy(val_fpix_np.values).type(dtype)
+    test_X = torch.from_numpy(test_X_np).type(dtype)
+    test_Y = torch.from_numpy(test_Y_np.values).type(dtype).view(-1, 1)
+    test_Fpix = torch.from_numpy(test_fpix_np.values).type(dtype)
 
     dataset = TensorDataset(train_X, train_Y, train_Fpix)
     loader = DataLoader(dataset, batch_size=128, shuffle=True)
 
     objective = make_objective(test_X, test_Y, test_Fpix, val_X, val_Y, val_Fpix, loader)
     study = optuna.create_study(direction="minimize")
-    study.optimize(objective, n_trials=200)
+    study.optimize(objective, n_trials=n_trials)
     
+    # --- ここから保存処理 ---
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    run_dir = os.path.join(SAVE_DIR, f"{tag}_study_{timestamp}")
+    os.makedirs(run_dir, exist_ok=True)
+
+    # 1) すべてのトライアルのメタデータを CSV に保存
+    rows = []
+    for t in study.trials:
+        row = {
+            "trial": t.number,
+            "value(val_loss)": t.value,
+            "val_loss": t.user_attrs.get("val_loss", np.nan),
+            "test_loss": t.user_attrs.get("test_loss", np.nan),
+            "params": json.dumps(t.params),
+        }
+        rows.append(row)
+    df_log = pd.DataFrame(rows).sort_values("value(val_loss)")
+    df_log.to_csv(os.path.join(run_dir, "trials_log.csv"), index=False)
+
+    # 2) 全トライアル or 上位K件のモデルを保存（容量に応じて選んでください）
+    #    ここでは上位K件のみ保存（全件保存したい場合は df_log の全行を回せばOK）
+    save_trials = df_log.head(top_k)["trial"].tolist()
+    for rank, tnum in enumerate(save_trials, start=1):
+        t = study.trials[tnum]
+        sd = t.user_attrs.get("state_dict", None)
+        if sd is None:
+            continue
+        fname = os.path.join(run_dir, f"rank{rank:02d}_trial{tnum:03d}_val{t.value:.5g}.pt")
+
+        # 同じ構造でモデル再構築（各 trial のハイパラを使用）
+        width = t.params["width"]
+        depth = t.params["depth"]
+        model = build_model(input_dim=X.shape[1], width=width, depth=depth)
+        model.load_state_dict(sd)
+
+        torch.save(
+            {
+                "state_dict": model.state_dict(),
+                "config": {"input_dim": X.shape[1], "width": width, "depth": depth},
+                "lr": t.params["lr"],
+                "val_loss": t.user_attrs.get("val_loss", np.nan),
+                "test_loss": t.user_attrs.get("test_loss", np.nan),
+                "trial": t.number,
+                "params": t.params,
+            },
+            fname,
+        )
+
+    # 3) 最良モデルも別名で保存（従来互換）
     best_params = study.best_trial.params
-    best_state_dict = study.best_trial.user_attrs["best_state_dict"]
+    best_sd = study.best_trial.user_attrs["state_dict"]
+    best_model = build_model(input_dim=X.shape[1], width=best_params["width"], depth=best_params["depth"])
+    best_model.load_state_dict(best_sd)
 
-    # 同じ構造で再構築して保存
-    model = build_model(input_dim=X.shape[1], width=best_params["width"], depth=best_params["depth"])
-    model.load_state_dict(best_state_dict)
-    torch.save(model.state_dict(), "/home/YukaYamada/repository/PFS/notebook/output/best_model.pt")
+    best_path = os.path.join(run_dir, "best_model_logstar.pt")
+    torch.save(
+        {
+            "state_dict": best_model.state_dict(),
+            "config": {"input_dim": X.shape[1], "width": best_params["width"], "depth": best_params["depth"]},
+            "lr": best_params["lr"],
+            "val_loss": study.best_trial.user_attrs.get("val_loss", np.nan),
+            "test_loss": study.best_trial.user_attrs.get("test_loss", np.nan),
+            "trial": study.best_trial.number,
+            "params": best_params,
+        },
+        best_path,
+    )
 
+    print(f"[saved] logs: {os.path.join(run_dir, 'trials_log.csv')}")
+    print(f"[saved] best: {best_path}")
+    print(f"[saved] top-{top_k} checkpoints in: {run_dir}")
     return study
