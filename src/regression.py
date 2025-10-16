@@ -1,8 +1,11 @@
-from sklearn import linear_model
+import numpy as np
+import pandas as pd
+
 from sklearn.preprocessing import PolynomialFeatures
 from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
+<<<<<<< HEAD:src/Regression.py
 import pandas as pd
 from sklearn.metrics import r2_score
 from sklearn.metrics import mean_squared_error
@@ -19,6 +22,8 @@ import numpy as np
 
 import os, json, copy
 from datetime import datetime
+
+from sklearn.metrics import r2_score, mean_squared_error
 
 nside = 256
 area = hp.nside2pixarea(nside,degrees=True)
@@ -39,8 +44,6 @@ def target_weights(object, selection, properties):
     target_weight = pd.merge(target_data, properties, on="healpix", how="left")
     
     return target_weight
-    
-    
 
 def linear_weights(property, pixels, keys):
     """function to calculate weights using linear regression
@@ -232,6 +235,7 @@ def nn_weights(property, pixels, keys):
     
     return df_cleaned
 
+<<<<<<< HEAD:src/Regression.py
 class CustomLoss(nn.Module):
     def __init__(self, model, lambda_reg=1e-3):
         super().__init__()
