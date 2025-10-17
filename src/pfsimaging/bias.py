@@ -200,16 +200,14 @@ def get_property_tract(tract, dustmap):
     _dec = dec[out_mask]
     _patch = patch[out_mask]
     _healpy = healpy[out_mask] #healpix outside the stellar mask
-    #print(f"random distribution ra max:{np.max(_ra)} min:{np.min(_ra)}, dec  max:{np.max(_dec)} min:{np.min(_dec)}")
-    if (len(_patch)>0):
-        if isinstance(_patch, np.ndarray) and _patch.dtype.byteorder == '>':
-            _patch = _patch.astype(_patch.dtype.newbyteorder('='))
-        if isinstance(_healpy, np.ndarray) and _healpy.dtype.byteorder == '>':
-            _healpy = _healpy.astype(_healpy.dtype.newbyteorder('='))
-        random_data = pd.DataFrame({'patch':_patch, 'healpix':_healpy})
-    else:
-        print(f"All observation area of tract {tract} is inside the bright stellar mask")
-        return None
+    if len(_patch) == 0: 
+        raise ValueError(f"All observation area of tract {tract} is inside the bright stellar mask")
+    
+    if isinstance(_patch, np.ndarray) and _patch.dtype.byteorder == '>':
+        _patch = _patch.astype(_patch.dtype.newbyteorder('='))
+    if isinstance(_healpy, np.ndarray) and _healpy.dtype.byteorder == '>':
+        _healpy = _healpy.astype(_healpy.dtype.newbyteorder('='))
+    random_data = pd.DataFrame({'patch':_patch, 'healpix':_healpy})
     
     patches = loader.Patches()
     patches.load_patches(datapath, property_name, tract)
