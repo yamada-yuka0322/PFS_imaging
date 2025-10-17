@@ -125,14 +125,14 @@ def run_optuna_nn(property_df, pixels, keys):
     # 同じ構造で再構築して保存
     model = build_model(input_dim=X.shape[1], width=best_params["width"], depth=best_params["depth"])
     model.load_state_dict(best_state_dict)
-    torch.save(model.state_dict(), "/home/YukaYamada/repository/PFS/notebook/output/best_model_log.pt")
+    #torch.save(model.state_dict(), "/home/YukaYamada/repository/PFS/notebook/output/best_model_log.pt")
     
     checkpoint = {
         "state_dict": model.state_dict(),
         "config": {"in_dim": len(keys), "width": best_params["width"], "depth": best_params["depth"], "out_dim": 1, "lr":best_params["lr"]},
         "scaler": scaler  # joblib.dump したパス or そのまま入れてもOK（要件に応じて）
     }
-    torch.save(checkpoint, "best_model.pt")  # or .pth
+    torch.save(checkpoint, "/home/YukaYamada/repository/PFS/notebook/output/best_model_log.pt")  # or .pth
 
 
     return study
