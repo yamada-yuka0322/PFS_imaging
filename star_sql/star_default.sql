@@ -215,46 +215,6 @@ SELECT
         f1.y_pixelflags_saturatedcenter,
 	f1.y_pixelflags_interpolatedcenter,
 	f1.y_pixelflags_crcenter,
-	
-
-	-- Mizuki photo-z information 
-	p1.photoz_mean as pz_mean_mizuki, 
-	p1.photoz_best as pz_best_mizuki, 
-	p1.photoz_conf_mean as pz_conf_mean_mizuki, 
-	p1.photoz_conf_best as pz_conf_best_mizuki, 
-	p1.photoz_risk_mean as pz_risk_mean_mizuki, 
-	p1.photoz_risk_best as pz_risk_best_mizuki,
-	p1.photoz_std_mean as pz_std_mean_mizuki, 
-	p1.photoz_std_best as pz_std_best_mizuki,
-	p1.photoz_err68_min as pz_err68_min_mizuki, 
-	p1.photoz_err68_max as pz_err68_max_mizuki, 
-	p1.stellar_mass as mstar_mizuki,
-	p1.stellar_mass_err68_min as mstar_min_mizuki,
-	p1.stellar_mass_err68_max as mstar_max_mizuki
-	
-	-- DNNZ photo-z information 
-	-- p2.photoz_mean as pz_mean_dnnz, 
-	-- p2.photoz_best as pz_best_dnnz, 
-	-- p2.photoz_conf_mean as pz_conf_mean_dnnz, 
-	-- p2.photoz_conf_best as pz_conf_best_dnnz, 
-	-- p2.photoz_risk_mean as pz_risk_mean_dnnz, 
-	-- p2.photoz_risk_best as pz_risk_best_dnnz,
-	-- p2.photoz_std_mean as pz_std_mean_dnnz, 
-	-- p2.photoz_std_best as pz_std_best_dnnz,
-	-- p2.photoz_err68_min as pz_err68_min_dnnz, 
-	-- p2.photoz_err68_max as pz_err68_max_dnnz, 	
-
-	-- DEMP photo-z information 
-	-- p3.photoz_mean as pz_mean_demp, 
-	-- p3.photoz_best as pz_best_demp, 
-	-- p3.photoz_conf_mean as pz_conf_mean_demp, 
-	-- p3.photoz_conf_best as pz_conf_best_demp, 
-	-- p3.photoz_risk_mean as pz_risk_mean_demp, 
-	-- p3.photoz_risk_best as pz_risk_best_demp,
-	-- p3.photoz_std_mean as pz_std_mean_demp, 
-	-- p3.photoz_std_best as pz_std_best_demp,
-	-- p3.photoz_err68_min as pz_err68_min_demp, 
-	-- p3.photoz_err68_max as pz_err68_max_demp	
 
 FROM
 	s23b_wide.forced as f1
@@ -262,7 +222,6 @@ FROM
 	LEFT JOIN s23b_wide.forced4 as f4 USING (object_id)
 	LEFT JOIN s23b_wide.forced5 as f5 USING (object_id)
 	LEFT JOIN s23b_wide.forced6 as f6 USING (object_id)
-        LEFT JOIN s23b_wide.photoz_mizuki as p1 USING (object_id)
 	LEFT JOIN s23b_wide.meas as m1 USING (object_id)
 	LEFT JOIN s23b_wide.meas2 as m2 USING (object_id)
 	LEFT JOIN s23b_wide.meas3 as m3 USING (object_id)

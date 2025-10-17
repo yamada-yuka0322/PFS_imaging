@@ -20,7 +20,9 @@ property_name = ['gseeing', 'rseeing', 'iseeing', 'zseeing', 'yseeing', 'g_depth
 
 args    =   None
 diffver =   '-colorterm'
-datapath = f"/home/YukaYamada/data/PFS/s23{diffver}"
+
+path = os.getcwd()
+datapath = f"../data/PFS/s23{diffver}"
 nside = 256
 area = hp.nside2pixarea(nside,degrees=True)
 
@@ -65,7 +67,7 @@ def load_patch(field):
     
     data = {}
 
-    file_path = f"/home/YukaYamada/repository/PFS/PFS_imaging/Field/tracts_patches_W-{field}.txt"
+    file_path = f"../Field/tracts_patches_W-{field}.txt"
     with open(file_path, 'r') as file:
         lines = file.readlines()
     
@@ -106,6 +108,7 @@ def load_patch(field):
             data[tract]['patch'][patch] = (ra, dec)
 
     return data
+
 ##############################################################################################################
 def get_property_all(tractpatch, tractlist, dustmap):
     """function to get the properties of healpixels in a single field (AEGIS, autumn, hectomap or spring)
@@ -250,7 +253,7 @@ def get_property_tract(tract, dustmap):
     
 def add_ext(properties, dust):
     if dust=='desi':
-        dustfile = '../PFS/pfstarget/src/pfstarget/dat/desi_dust_gr_512.fits'
+        dustfile = '/dat/desi_dust_gr_512.fits'
         with fits.open(dustfile) as hdu:
             data = hdu[1].data
             healpix = data["HPXPIXEL"]
@@ -300,53 +303,6 @@ def add_ext(properties, dust):
     else:
         print(f'No dust file corresponding to {dust}')
     
-    return properties
-    
-def old_add_ext(properties):
-    """function to add extinction column to pd properties
-
-    Parameter
-    ------------------------------------------------------
-    properties: pd dataframe with imaging properties of healpixels
-    Must include healpix column
-
-    Output
-    ------------------------------------------------------
-    properties: pd dataframe with imaging properties of healpixels
-    """
-    with fits.open('csfd_ebv.fits') as hdu:
-        data = hdu[1].data
-        im=data["T"]
-    #healpix in galactic coordinate
-    m = np.ndarray.flatten(im)
-    _nside = hp.get_nside(m)
-    
-    # center coordinate of HEALPix (Galactic theta:co-latitude(rad), phi:longitude(rad))
-    Npix = hp.nside2npix(_nside)
-    theta, phi = hp.pix2ang(_nside, np.arange(Npix))
-    l = np.degrees(phi)  # Galactic longitude in degrees
-    b = 90 - np.degrees(theta)  # Galactic latitude in degrees
-
-    # Galactic -> Equatorial (RA, Dec)
-    galactic_coords = Galactic(l * u.deg, b * u.deg)
-    equatorial_coords = galactic_coords.transform_to(FK5(equinox='J2000'))
-
-    ra = equatorial_coords.ra.deg
-    dec = equatorial_coords.dec.deg
-
-    # Equatorial HEALPix インデックスを取得
-    new_pix = hp.ang2pix(_nside, np.radians(90 - dec), np.radians(ra), nest=False)
-
-    # Equatorial map of the dust extinction
-    equatorial_map = np.full(Npix, hp.UNSEEN)
-    equatorial_map[new_pix] = m
-
-    
-    MAG = hp.ud_grade(equatorial_map, nside)
-
-    healpix = properties['healpix']
-    a = MAG[healpix]
-    properties['extinction'] = a
     return properties
     
 
@@ -418,15 +374,13 @@ def imaging_bias(tractlist = '', dustmaps = ['desi'], directory='../property/', 
     #if no tracts, all tract in HSC database will be downloaded
 
     if (type(tractlist) is str):
-        tractname= '../PFS/pfstarget/bin/hsc/sql/TractInfoS23.csv'
+        tractname= '/dat/TractInfoS23.csv'
         tracts      =   ascii.read(tractname)['tract']
         tractlist = list(tracts)
 
 ####################################################################
     #tract_patch 
     autumn = TractPatch("autumn")
-    AEGIS = TractPatch("AEGIS")
-    hectomap = TractPatch("hectomap")
     spring = TractPatch("spring")
     #patches.load_patches(datapath, property_name)
 ####################################################################
@@ -440,22 +394,6 @@ def imaging_bias(tractlist = '', dustmaps = ['desi'], directory='../property/', 
     else:
         table = Table.from_pandas(autumn_property)
         table.write(autumn_file, format='fits', overwrite=True)
-
-    #AEGIS_file     =   os.path.join(directory,'AEGIS_property_desi-csfd_dust.fits')
-    #AEGIS_property = get_property_all(AEGIS, target_healpix, tractlist)
-    #if AEGIS_property.empty:
-        #print(f"no tract in AEGIS field")
-    #else:
-        #table = Table.from_pandas(AEGIS_property)
-        #table.write(AEGIS_file, format='fits', overwrite=True)
-        
-    #hectomap_file     =   os.path.join(directory,'hectomap_property_desi_dust.fits')
-    #hectomap_property = get_property_all(hectomap, target_healpix, tractlist)
-    #if hectomap_property.empty:
-        #print(f"no tract in hectomap field")
-    #else:
-        #table = Table.from_pandas(hectomap_property)
-        #table.write(hectomap_file, format='fits', overwrite=True)
         
     spring_file     =   os.path.join(directory,f'spring_property{savename}.fits')
     spring_property = get_property_all(spring, tractlist, dustmaps)
