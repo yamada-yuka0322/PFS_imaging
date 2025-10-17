@@ -1,0 +1,33 @@
+Metadata-Version: 2.4
+Name: pfsimaging
+Version: 0.1
+Summary: Correcting imaging systematic for the PFS Cosmology Survey
+Home-page: https://github.com/yamada-yuka0322/PFS_imaging
+Author: Yuka Yamada
+Author-email: yamada-yuka0322@g.ecc.u-tokyo.ac.jp
+Maintainer: Yuka Yamada
+Maintainer-email: yamada-yuka0322@g.ecc.u-tokyo.ac.jp
+License: MIT
+Classifier: Development Status :: 2 - Pre-Alpha
+Classifier: Intended Audience :: Science/Research
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Classifier: Programming Language :: Python :: 3
+Description-Content-Type: text/markdown
+Requires-Dist: numpy>1.18
+Requires-Dist: astropy
+Requires-Dist: healpy
+Dynamic: author
+Dynamic: author-email
+Dynamic: classifier
+Dynamic: description
+Dynamic: description-content-type
+Dynamic: home-page
+Dynamic: license
+Dynamic: maintainer
+Dynamic: maintainer-email
+Dynamic: requires-dist
+Dynamic: summary
+
+# PFS_imaging
+Update control for PFS imaging study
