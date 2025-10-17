@@ -14,9 +14,11 @@ Classifier: License :: OSI Approved :: MIT License
 Classifier: Operating System :: OS Independent
 Classifier: Programming Language :: Python :: 3
 Description-Content-Type: text/markdown
-Requires-Dist: numpy>1.18
+Requires-Dist: numpy
 Requires-Dist: astropy
 Requires-Dist: healpy
+Requires-Dist: matplotlib
+Requires-Dist: pandas
 Dynamic: author
 Dynamic: author-email
 Dynamic: classifier

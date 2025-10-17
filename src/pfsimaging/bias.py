@@ -6,8 +6,6 @@ import healpy as hp
 import os
 from multiprocessing import Pool
 import astropy.io.ascii as ascii
-from astropy.coordinates import Galactic, FK5
-import astropy.units as u
 from functools import partial
 import pandas as pd
 

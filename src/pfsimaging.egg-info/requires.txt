@@ -1,3 +1,5 @@
-numpy>1.18
+numpy
 astropy
 healpy
+matplotlib
+pandas

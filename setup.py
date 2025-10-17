@@ -20,9 +20,11 @@ CLASSIFIERS = [
     "Programming Language :: Python :: 3",
 ]
 INSTALL_REQUIRES = [
-        "numpy>1.18",
+        "numpy",
         "astropy", 
-        "healpy"
+        "healpy",
+        "matplotlib",
+        "pandas"
 ]
 # END PROJECT SPECIFIC
 

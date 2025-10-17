@@ -1,15 +1,12 @@
 import numpy as np
 import healpy as hp
 from matplotlib.path import Path
-from astropy.table import Table
 
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from matplotlib.colors import ListedColormap
 
 import pandas as pd
-
-from joblib import load as joblib_load
 
 def mask_edge(autumn, spring):
     # Healpix pixel centers
