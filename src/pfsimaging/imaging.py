@@ -200,6 +200,7 @@ def get_property_tract(tract, dustmap):
     _dec = dec[out_mask]
     _patch = patch[out_mask]
     _healpy = healpy[out_mask] #healpix outside the stellar mask
+
     #print(f"random distribution ra max:{np.max(_ra)} min:{np.min(_ra)}, dec  max:{np.max(_dec)} min:{np.min(_dec)}")
     if (len(_patch)>0):
         #fixing the byteorder of _healpy array and _patch array in case they are in Big-endian order
