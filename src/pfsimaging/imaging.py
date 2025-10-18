@@ -352,7 +352,7 @@ def add_star_count(properties, stardict, tract):
     return properties
     
 ###########################################################################################################
-def imaging_bias(tractlist = '', dustmaps = ['desi'], directory='../property/', savename=''):
+def get_imaging_property(tractlist = '', dustmaps = ['desi'], directory='../property/', savename=''):
     """function to calculate the imaging systematics and target density for each healpixel
 
     Parameters

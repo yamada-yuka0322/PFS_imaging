@@ -7,7 +7,7 @@ import healpy as hp
 
 import pandas as pd
 
-from . import bias as Bias
+from . import imaging as Im
 from . import statistic as stat
 
 names = {
@@ -120,7 +120,7 @@ def plot_ang(autumn, spring, targets, field='all'):
         
     _data = data.copy()
     for name, target in targets.items():
-        _data = Bias.get_target_density(target, _data, name = name)
+        _data = Im.get_target_density(target, _data, name = name)
         
     keys = ["gseeing", "rseeing", "iseeing", "zseeing", "yseeing", "g_depth", "r_depth", "i_depth", "z_depth", "y_depth", "desi_extinction", "star_log"]
     fig, axes = plt.subplots(2, 6, figsize=(30, 10))
@@ -184,7 +184,7 @@ def plot_dens(autumn, spring, targets, field='all'):
         
     _data = data.copy()
     for name, target in targets.items():
-        _data = Bias.get_target_density(target, _data, name = name)
+        _data = Im.get_target_density(target, _data, name = name)
         
     keys = ["gseeing", "rseeing", "iseeing", "zseeing", "yseeing", "g_depth", "r_depth", "i_depth", "z_depth", "y_depth", "desi_extinction", "star_log"]
     fig, axes = plt.subplots(2, 6, figsize=(30, 10), sharey=True)
@@ -244,7 +244,7 @@ def plot_PS(autumn, spring, targets, field='all'):
         
     _data = data.copy()
     for name, target in targets.items():
-        _data = Bias.get_target_density(target, _data, name = name)
+        _data = Im.get_target_density(target, _data, name = name)
     
     keys = ["gseeing", "rseeing", "iseeing", "zseeing", "yseeing", "g_depth", "r_depth", "i_depth", "z_depth", "y_depth", "desi_extinction", "star_log"]
     fig, axes = plt.subplots(2, 6, figsize=(30, 10), sharey=True)
