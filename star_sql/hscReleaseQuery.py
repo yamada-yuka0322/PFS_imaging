@@ -62,12 +62,12 @@ def main():
     if 'patches' in args.__dict__['sql-file'].name:
         is_patches=True
         doUnzip = False
-        prefix  =   '/data/PFS/%s%s' %(release_year,diffver)
+        prefix  =   '../data/PFS/%s%s' %(release_year,diffver)
     else:
         sql_file = args.__dict__['sql-file'].name
         name = sql_file.split('.')[0]
-        prefix  =   '/data/PFS/%s%s/sql_%s' %(release_year,diffver, name)
-        prefix2 =   '/data/PFS/%s%s/tracts_%s' %(release_year,diffver, name)
+        prefix  =   '../data/PFS/%s%s/sql_%s' %(release_year,diffver, name)
+        prefix2 =   '../data/PFS/%s%s/tracts_%s' %(release_year,diffver, name)
         if not os.path.exists(prefix2):
             os.system('mkdir -p %s' %prefix2)
         
