@@ -202,6 +202,8 @@ def get_property_tract(tract, dustmap):
     _healpy = healpy[out_mask] #healpix outside the stellar mask
     #print(f"random distribution ra max:{np.max(_ra)} min:{np.min(_ra)}, dec  max:{np.max(_dec)} min:{np.min(_dec)}")
     if (len(_patch)>0):
+        #fixing the byteorder of _healpy array and _patch array in case they are in Big-endian order
+        #pandas dataframe only accepts little-endian order
         if isinstance(_patch, np.ndarray) and _patch.dtype.byteorder == '>':
             _patch = _patch.astype(_patch.dtype.newbyteorder('='))
         if isinstance(_healpy, np.ndarray) and _healpy.dtype.byteorder == '>':
