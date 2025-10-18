@@ -200,14 +200,19 @@ def get_property_tract(tract, dustmap):
     _dec = dec[out_mask]
     _patch = patch[out_mask]
     _healpy = healpy[out_mask] #healpix outside the stellar mask
-    if len(_patch) == 0: 
-        raise ValueError(f"All observation area of tract {tract} is inside the bright stellar mask")
-    
-    if isinstance(_patch, np.ndarray) and _patch.dtype.byteorder == '>':
-        _patch = _patch.astype(_patch.dtype.newbyteorder('='))
-    if isinstance(_healpy, np.ndarray) and _healpy.dtype.byteorder == '>':
-        _healpy = _healpy.astype(_healpy.dtype.newbyteorder('='))
-    random_data = pd.DataFrame({'patch':_patch, 'healpix':_healpy})
+
+    #print(f"random distribution ra max:{np.max(_ra)} min:{np.min(_ra)}, dec  max:{np.max(_dec)} min:{np.min(_dec)}")
+    if (len(_patch)>0):
+        #fixing the byteorder of _healpy array and _patch array in case they are in Big-endian order
+        #pandas dataframe only accepts little-endian order
+        if isinstance(_patch, np.ndarray) and _patch.dtype.byteorder == '>':
+            _patch = _patch.astype(_patch.dtype.newbyteorder('='))
+        if isinstance(_healpy, np.ndarray) and _healpy.dtype.byteorder == '>':
+            _healpy = _healpy.astype(_healpy.dtype.newbyteorder('='))
+        random_data = pd.DataFrame({'patch':_patch, 'healpix':_healpy})
+    else:
+        print(f"All observation area of tract {tract} is inside the bright stellar mask")
+        return None
     
     patches = loader.Patches()
     patches.load_patches(datapath, property_name, tract)
@@ -350,7 +355,7 @@ def add_star_count(properties, stardict, tract):
     return properties
     
 ###########################################################################################################
-def imaging_bias(tractlist = '', dustmaps = ['desi'], directory='../property/', savename=''):
+def get_imaging_property(tractlist = '', dustmaps = ['desi'], directory='../property/', savename=''):
     """function to calculate the imaging systematics and target density for each healpixel
 
     Parameters
