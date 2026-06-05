@@ -24,7 +24,10 @@ INSTALL_REQUIRES = [
         "astropy", 
         "healpy",
         "matplotlib",
-        "pandas"
+        "pandas",
+        "scikit-learn",
+        "torch",
+        "optuna",
 ]
 # END PROJECT SPECIFIC
 
