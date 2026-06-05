@@ -7,3 +7,7 @@ target_selection:
   pfstarget: /home/YukaYamada/repository/PFS/pfstarget   ##path to the pfstarget repository
   random_sql: /bin/hsc/sql/s23b_wide_randoms.sql      ## location of the random sql
   galaxy_sql: /bin/hsc/sql/s23b_wide_pfs.sql        ## location of the galaxy sql
+
+Gaia:
+  output_dir: /lustre/work/YukaYamada/data/Gaia_HSC ##Directory path for the downloaded Gaia stars
+  bsmask_dir: /lustre/work/YukaYamada/data/PFS/s23b_bsmask/ ##Directory path to generate updated bright star masks for the galaxies and the randoms
