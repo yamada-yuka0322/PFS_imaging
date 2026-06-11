@@ -31,9 +31,9 @@ def chunkNList(seq, num):
 
 def GetSQLPath(kind, config):
     if (kind=='star'):
-        path = config["hsc"]["star_sql"]
+        path = "../" + config["hsc"]["star_sql"]
     elif (kind=='patchqa'):
-        path = config["hsc"]["patchqa_sql"]
+        path = "../" + config["hsc"]["patchqa_sql"]
     elif (kind == 'random'):
         path = os.path.join(config["target_selection"]["pfstarget"], config["target_selection"]["random_sql"])
     elif (kind == 'galaxy'):
@@ -46,7 +46,7 @@ def GetNgroups(kind):
     if (kind == 'patchqa'):
         return 1
     else:
-        return 40
+        return 1
 
 def main():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -92,7 +92,7 @@ def main():
     # tracts for DR4 S23B
     release_version =   'dr4'
     ngroups =   GetNgroups(args.kind)
-    tractname=  'Tracttest.csv'
+    tractname=  './Tracttest.csv'
     
     # randoms or objects 
     prefix  =   f"{output_dir}/{args.kind}/tract_group"
@@ -115,19 +115,12 @@ def main():
     if doDownload:
         global credential
         credential  =   {'account_name': args.user, 'password': getPassword()}
-        if is_patches:
-            downloadAll()
-        else:
-            for ig,tractL in enumerate(tracts2):
-                #restart
-                #if(ig<194): continue
-                print('Group: %s' %ig)
-                downloadTracts(ig,tractL)
-
-    if doUnzip:
         for ig,tractL in enumerate(tracts2):
-            print('unzipping group: %s' %ig)
-            separateTracts(ig,tractL)
+            print('Group: %s' %ig)
+            downloadTracts(ig,tractL)
+            if doUnzip:
+                print('unzipping group: %s' %ig)
+                separateTracts(ig,tractL)
     
     return
 
@@ -146,7 +139,7 @@ def separateTracts(ig,tractL):
             print('already have file for tract: %s' \
                     %tract)
             continue
-        fits        =   fitsAll[fitsAll['tract']==tract]
+        fits        =   fitsAll[fitsAll['tract']==int(tract)]
         if len(fits)>10:
             pyfits.writeto(outfname,fits)
         del fits
@@ -171,10 +164,6 @@ def downloadTracts(ig, tractL):
     if args.delete_job:
         deleteJob(credential, job['id'])
     print('closing output file')
-    fileBuffer.close()
-    fileOut.close()
-    del fileBuffer
-    del fileOut
     return
 
 def downloadAll():
