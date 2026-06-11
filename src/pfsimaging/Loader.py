@@ -5,23 +5,43 @@ from astropy.io import fits
 from pfstarget import cuts as Cuts
 import os
 
+import re
+
 class Star(object):
-    """class object to contain the star objects for a single tract
-    
+    """Container for stellar objects　in a single tract.
+
+    Attributes
+    ------------------------------------------------------
+    ra: array or None
+        ra of stars in degrees. 0~360 degrees
+
+    dec: array or None
+        Dec of stars in degrees.
+
+    mask: array of bool or None
+        updated bright stellar mask. True if "inside" the mask
+        
+    patch: array. or None
+        patch ID of stars
+
+    Methods
+    ------------------------------------------------------
+    load_stars(tract, config):
+        Load stellar objects and corresponding bright-star mask
+        for the specified tract. config is a dictionary of path read from the config.yaml file in the config directory
     """
-    def __init__(self, name):
-        self.name = name
+    def __init__(self):
         self.ra = None
         self.dec = None
         self.mask = None
+        self.patch = None
         
     def load_stars(self, tract, config):
         path = os.path.join(config["hsc"]["output_dir"], "star", "tract")
         filename = os.path.join(path, f"{tract}.fits")
         
         mask_path = os.path.join(config["Gaia"]["bsmask_dir"] , f"star/{tract}.fits")
-        
-        filename = path + f"/tracts_{self.name}/{tract}.fits"
+
         if os.path.exists(filename) and os.path.exists(mask_path):
             with fits.open(filename) as hdu:
                 if len(hdu)==2:
@@ -37,6 +57,7 @@ class Star(object):
                     
                     self.ra = data['ra'][mask]%360
                     self.dec = data['dec'][mask]
+                    self.patch = data['patch'][mask]
                     
             with fits.open(mask_path) as hdu:
                 if len(hdu)==2:
@@ -49,7 +70,27 @@ class Star(object):
                     
             
 class Random(object):
-    """class object to contain the random objects for a single tract
+    """Container for HSC randoms　in a single tract.
+
+    Attributes
+    ------------------------------------------------------
+    ra: array or None
+        ra of randoms in degrees. 0~360 degrees
+
+    dec: array or None
+        Dec of randoms in degrees.
+        
+    patch: array. or None
+        patch ID of randoms
+
+    mask: array of bool or None
+        updated bright stellar mask. True if "inside" the mask
+
+    Methods
+    ------------------------------------------------------
+    load_random(tract, config):
+        Load randoms and corresponding bright-star mask
+        for the specified tract. config is a dictionary of path read from the config.yaml file in the config directory
     """
     
     def __init__(self):
@@ -59,10 +100,12 @@ class Random(object):
         self.mask = None
         
     def load_random(self, tract, config):
-        random_path = os.path.join(config["hsc"]["output_dir"], "random", "tract")
+        #random_path = os.path.join(config["hsc"]["output_dir"], "random", "tract")
+        random_path = os.path.join(config["hsc"]["output_dir"], "tracts_ran")
         filename = os.path.join(random_path, f"{tract}.fits")
         
-        mask_path = outdir = os.path.join(config["Gaia"]["bsmask_dir"] , f"random/{tract}.fits")
+        #mask_path = outdir = os.path.join(config["Gaia"]["bsmask_dir"] , f"random/{tract}.fits")
+        mask_path = outdir = os.path.join(config["Gaia"]["bsmask_dir"] , f"randoms/{tract}.fits")
         
         if os.path.exists(filename) and os.path.exists(mask_path):
             with fits.open(filename) as hdu:
@@ -70,7 +113,7 @@ class Random(object):
                     data = hdu[1].data
                     no_overlap = data['detect_ispatchinner'] & data['detect_istractinner']
                     self.patch = data['patch'][no_overlap]
-                    mask = Cuts.random_masking(data[[no_overlap]])
+                    mask = Cuts.random_masking(data[no_overlap]) # standard mask. True if 'inside' the masked region
                     
             with fits.open(mask_path) as hdu:
                 if len(hdu)==2:
@@ -85,19 +128,33 @@ class Random(object):
             print(f'cannot find {filename}')
 
 class Patches(object):
-    """Class object to include the properties of the entire patch
-    
+    """Container for imaging properties defined per patch　in a single tract.
+
+    Attributes
+    ------------------------------------------------------
+    patch: array. or None
+        patch ID. must be unique within each tract
+
+    skymap_id: array or None
+        tract ID + patch ID. uniquestion throughout observation
+        
+    property: pandas DataFrame or None
+        imaging property for each patch. The columns should be specified in the property_list
+    Methods
+    ------------------------------------------------------
+    load_patches(tract, config, property_list):
+        Load patches and corresponding imaging properties
+        The imaging properties should be specified in the property_list parameter
     """
     
     def __init__(self):
-        self.tract = None
         self.patch = None
         self.skymap_id = None
         self.property = None
     
-    def load_patches(self, property_list, config):
-        path = os.path.join(config["hsc"]["output_dir"], "patchqa", "tract_group")
-        filename = path + f"0.fits"
+    def load_patches(self, tract, config, property_list = ['gseeing', 'rseeing', 'iseeing', 'zseeing', 'yseeing', 'g_depth', 'r_depth', 'i_depth', 'z_depth', 'y_depth']):
+        path = os.path.join(config["hsc"]["output_dir"], "tracts_patch")
+        filename = os.path.join(path, f"{tract}.fits")
         if os.path.exists(filename):
             with fits.open(filename) as hdu:
                 if len(hdu)==2:
@@ -111,21 +168,24 @@ class Patches(object):
                         if val.dtype.byteorder == '>':
                             val = val.astype(val.dtype.newbyteorder('='))
                         properties[key] = val
+                    properties['patch'] = self.patch
                     self.property = pd.DataFrame(properties)
-            
-    def get_properties(self, tract):
-        properties = {}
-        selection = (self.tract == tract)
-        for key, data in self.property.items():
-            properties[key] = data[selection]
-            
-        properties['patch'] = self.patch[selection]
-        return pd.DataFrame(properties)
 
 class TractPatch(object):
-    """ Class object for patch tract information. 
+    """Container for tract patch information of a specified field
+
+    Attributes
+    ------------------------------------------------------
+    field: string or None
+        name of the considered field
         
-        """
+    data: dictionary
+        output of load_patch(field) function. Includes the information about the tract, patch polygon
+        
+    ------------------------------------------------------
+    get_tract():
+        returns the whole tract included in the condsidered field
+    """
     def __init__(self, field):
         r"""
         Parameter
@@ -136,6 +196,7 @@ class TractPatch(object):
         Example
         ----------------------
         >>> autumn = TractPatch("autumn")
+        autumn_tract = autumn.get_tract()
         """
         self.field = field
         self.data = load_patch(field)

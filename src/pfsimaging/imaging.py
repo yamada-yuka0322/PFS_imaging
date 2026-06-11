@@ -1,4 +1,3 @@
-import re
 import numpy as np
 from astropy.io import fits
 from astropy.table import Table, vstack
@@ -9,7 +8,7 @@ import astropy.io.ascii as ascii
 from functools import partial
 import pandas as pd
 
-from . import Loader as loader
+from pfsimaging import Loader as loader
 
 field = ['AEGIS', 'autumn', 'hectomap', 'spring']
 property_name = ['gseeing', 'rseeing', 'iseeing', 'zseeing', 'yseeing', 'g_depth', 'r_depth', 'i_depth', 'z_depth', 'y_depth']
@@ -26,14 +25,20 @@ def get_property_all(tractpatch, tractlist, dustmap, config):
     tractpatch: instance
     instance of tractpatch class. Includes the information about the tract and patch included in the field considered.
 
-    target_healpix: np array
-    array of target healpixels
+    tractlist: array
+    array of tract that would included in the output table
+    
+    dustmap: list
+    dust map names to be applied ["desi", "desi-csfd", "csfd"]
+    
+    config: dictionary
+    dictionary of path read from the config.yaml file in the config directory
 
     output
     ------------------------------------------
     t:table
     table  of imaging properties for each healpixels in the field
-    includes seeing, depth, stellar density, target density and extinction
+    column: healpix, {g,r,i,z,y}seeing, {g,r,i,z,y}_depth, extinction, target, star, area, total
     """
 
 
@@ -59,12 +64,17 @@ def get_property_all(tractpatch, tractlist, dustmap, config):
         if valid_results:
             all_property = pd.concat(valid_results, ignore_index=True)
 
-            #When healpixels are overlapping between different tracts, take the averaage weighted by the effective overlapping area for all of the tracts 
-            all_columns = property_name + [dust+'_extinction' for dust in dustmap]
+            #When healpixels are overlapping between different tracts, take the area weighted average between the effective overlapping area for all of the tracts 
+            all_columns = property_name
             property = all_property.groupby('healpix').apply(lambda x: pd.Series(
-                {col: np.sum(x[col] * x['eff_area']) / np.sum(x['eff_area']) for col in all_columns} |  # Seeing, depth, extinction
+                {col: np.sum(x[col] * x['eff_area']) / np.sum(x['eff_area']) for col in all_columns} |  # Seeing, depth
                 {'area': np.sum(x['eff_area']) / np.sum(x['total']) * area}|
-                {'star': np.log10(np.sum(x['star'])/(np.sum(x['eff_area'] / np.sum(x['total']) * area)))})).reset_index()
+                {'star': np.log10(np.sum(x['star'])/(np.sum(x['eff_area'] / np.sum(x['total']) * area)))} |
+                {'total': np.sum(x['total'])})).reset_index()
+            
+            for dust in dustmap:
+                print(f'adding dust extinction for {dust}')
+                property = add_ext(property, dust)
             return property
         else:
             # return table if empty
@@ -73,15 +83,21 @@ def get_property_all(tractpatch, tractlist, dustmap, config):
     
 
 def get_property_tract(tract, dustmap, config, patches):
-    """function to get the property of the healpix within a tract
+    """function to get the property of the healpix within a single tract
 
     Parameters
     -------------------------------------------------
     tract:int
-    number of tract considered
+    ID of tract considered
     
-    tractpatch_dict: dictionary
-    dictionary including the tract patch information]
+    dustmap: list
+    dust map names to be applied ["desi", "desi-csfd", "csfd"]
+    
+    config: dictionary
+    dictionary of path read from the config.yaml file in the config directory
+    
+    patches: instance
+    instance of load.patch class. Includes the {g,r,i,z,y}-depth and {g,r,i,z,y}-seeing defined for each patch
 
     Output
     ------------------------------------------------
@@ -98,37 +114,34 @@ def get_property_tract(tract, dustmap, config, patches):
     random_mask = randoms.mask # true if "inside" masked region
     random_patch = randoms.patch
 
-    #healpix全体に入ってるrandomの数
+    #healpix of the all randoms
     healpix = hp.ang2pix(nside=nside, theta=random_ra, phi=random_dec, lonlat=True) #entire healpix in the tract
+    
     healpix = to_little_endian(healpix)
+    random_mask = to_little_endian(random_mask).astype(bool)
+    random_patch = to_little_endian(random_patch)
     
     df = pd.DataFrame({
         'healpix': healpix,
-        'mask': ~random_mask
-        'patch': random_patch
+        'mask': ~random_mask,
+        'patch': random_patch,
     })
 
     properties = (
         df.groupby('healpix')
         .agg(
-            total=('mask', 'size'),   # maskをかける前の総数
-            eff_area=('mask', 'sum')    # mask=True の数
+            total=('mask', 'size'),   # total random count before masking
+            eff_area=('mask', 'sum')    # random count after masking
         )
         .reset_index()
     )
 
-    # healpixごとに一発集計
-    
-    
     patch_prop = band_property(tract, patches, df)
     if patch_prop is None:
         return None
     properties = pd.merge(properties, patch_prop, on='healpix', how='left')
     
-    #properties = add_eff_area(mask, properties)
-    for dust in dustmap:
-        print(f'added {dust} in {tract}')
-        properties = add_ext(properties, dust)
+    properties = add_eff_area(mask, properties)
     #############star file name
     print(f'adding stellar density on {tract}')
     properties = add_star_count(properties, tract,config)
@@ -143,6 +156,27 @@ def to_little_endian(arr):
 def band_property(tract, patches, df):
     """
     function to add the g,r,i,z,y-depth and seeing of each healpixels
+    
+    Parameter
+    ------------------------------------------
+    tract: int
+    ID of tract considered
+
+    patches: instance
+    instance of load.patch class. Includes the {g,r,i,z,y}-depth and {g,r,i,z,y}-seeing defined for each patch
+    
+    df: PdDataframe
+    dataframe including the randoms in the concidered tract
+    column: 'healpix', 'mask', 'patch'
+    1. healpix: which healpix the random is included in
+    2. mask: true if outside mask
+    3. patch: which patch the random is included in
+
+    output
+    ------------------------------------------
+    t:PdDataframe
+    dataframe  of imaging properties for each randoms points
+    defined by cross matching patch ID
     """
     Property = patches.get_properties(tract)
     
@@ -163,6 +197,30 @@ def band_property(tract, patches, df):
     return patch_prop
     
 def add_ext(properties, dust):
+    """
+    function to read in the dust map file and get E(B-V) for each healpixel
+    Parameter
+    ------------------------------------------
+    tract: int
+    ID of tract considered
+
+    patches: instance
+    instance of load.patch class. Includes the {g,r,i,z,y}-depth and {g,r,i,z,y}-seeing defined for each patch
+    
+    df: PdDataframe
+    dataframe including the randoms in the concidered tract
+    column: 'healpix', 'mask', 'patch'
+    healpix: which healpix the random is included in
+    mask: true if outside mask
+    patch: which patch the random is included in
+
+    output
+    ------------------------------------------
+    properties: PdDataframe
+    dataframe  of imaging properties for each healpix ()
+    
+    """
+    #desi dust map
     if dust=='desi':
         dustfile = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'dat', 'desi_dust_gr_512.fits')
         with fits.open(dustfile) as hdu:
@@ -177,6 +235,7 @@ def add_ext(properties, dust):
         ebv = hp.ud_grade(ebv_map, nside)
         properties['desi_extinction'] = ebv[properties['healpix']]
     
+    #desi csfd matched dust map
     elif dust=='desi-csfd':
         filename = "/lustre/work/jingjing.shi/pfs_co_fa/data_raw/dustmaps/CSFD_DESI_merged_dust_map_NS2048_ring--Equatorial.fits"
         hdul = fits.open(filename)
@@ -185,16 +244,12 @@ def add_ext(properties, dust):
         hdul.close()
     
         _nside = hp.get_nside(df_csfd_desi)
-        #ind_galactic = np.arange(hp.get_map_size(df_csfd_desi['EBV_CSFD_DESI_merged_at_1deg']))
-        #theta_galactic, phi_galactic = hp.pix2ang(_nside, ind_galactic)
-        #r = hp.Rotator(coord=["C", "G"])
-        #theta_equatorial, phi_equatorial = r(theta_galactic, phi_galactic)
-        #ind_equatorial = hp.ang2pix(_nside, theta_equatorial, phi_equatorial)
 
         ebv = hp.ud_grade(df_csfd_desi, nside)
         properties['desi-csfd_extinction'] = ebv[properties['healpix']]
         hdul.close()
         
+    #csfd dust map
     elif dust=='csfd':
         filename = "/lustre/work/jingjing.shi/pfs_co_fa/data_raw/dustmaps/CSFD_DESI_merged_dust_map_NS2048_ring.fits"
         hdul = fits.open(filename)
@@ -228,7 +283,8 @@ def add_star_count(properties, tract, config):
 
     Output
     ------------------------------------------------------
-    table2: pd dataframe with imaging properties of healpixels
+    properties: pd dataframe with imaging properties of healpixels
+    with 'star' the total stellar count
     """
     
     star = loader.Star()
@@ -255,27 +311,29 @@ def add_star_count(properties, tract, config):
     return properties
     
 ###########################################################################################################
-def get_imaging_property(tractlist = '', dustmaps = ['desi'], config):
+def get_imaging_property(config, tractlist = None, dustmaps = ['desi']):
     """function to calculate the imaging systematics and target density for each healpixel
 
     Parameters
     --------------------------------------------------------------------------------------
-    object: structured numpy array of HSC objects with relevant columns
-        for target selection
-
-    selection: bool array of target galaxies
-
-    keys: dictionary to download from HSC database
+    config: dictionary
+    dictionary of path read from the config.yaml file in the config directory
+    
+    tractlist: list 
+    list of tracts that would be included in the output table
+    
+    dustmaps: list
+    dust map names to be applied ["desi", "desi-csfd", "csfd"]
 
     Output
     --------------------------------------------------------------------------------------
-    autumn_property, AEGIS_property, hectomap_property, spring_property: table with column: healpix, {g,r,i,z,y}seeing,
-    {g,r,i,z,y}_depth, extinction, target, star, area
+    autumn_property, spring_property: table
+    column: healpix, {g,r,i,z,y}seeing, {g,r,i,z,y}_depth, extinction, target, star, area, total
     """
 ###################################################################    
     #if no tracts, all tract in HSC database will be downloaded
 
-    if (type(tractlist) is str):
+    if (tractlist is None):
         tractname = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'dat', 'Tracttest.csv')
         print(tractname)
         tracts      =   ascii.read(tractname)['tract']
@@ -316,7 +374,22 @@ def get_imaging_property(tractlist = '', dustmaps = ['desi'], config):
 
 ######################################################################
 
-def get_target_density(targets, Property, name = 'target'):
+def get_target_density(targets, Property):
+    """function to calculate target density for each healpixel
+
+    Parameter
+    ------------------------------------------------------
+    targets:structured array
+    output of pfstarget.isCosmology()
+    
+    Property: pd dataframe with imaging properties of healpixels
+    Must include 'healpix' and 'area' column
+
+    Output
+    ------------------------------------------------------
+    properties: pd dataframe with imaging properties of healpixels
+    with 'star' the total stellar count
+    """
     if ('area' in Property.columns) and ('healpix' in Property.columns):
         target_ra = targets['RA']
         target_dec = targets['DEC']
@@ -324,31 +397,12 @@ def get_target_density(targets, Property, name = 'target'):
         
         # count the number of galaxies in each healpix
         _healpy, counts = np.unique(healpix, return_counts=True)
-        data1 = pd.DataFrame({'healpix':_healpy, name : counts})
+        data1 = pd.DataFrame({'healpix':_healpy, 'target' : counts})
         
         merged = pd.merge(Property, data1, on='healpix', how='left')
         merged = merged.fillna({name: 0})
-        merged[name] /= merged['area']
+        merged['target'] /= merged['area']
         return merged
     else:
         print('No area or healpix column in given data')
         return Property
-    
-def get_target_density1(targets, Property, name = 'target', area = 'area'):
-    if (area in Property.columns) and ('healpix' in Property.columns):
-        target_ra = targets['RA']
-        target_dec = targets['DEC']
-        healpix = hp.ang2pix(nside, target_ra, target_dec, nest=False, lonlat=True)
-        
-        # count the number of galaxies in each healpix
-        _healpy, counts = np.unique(healpix, return_counts=True)
-        data1 = pd.DataFrame({'healpix':_healpy, name : counts})
-        
-        merged = pd.merge(Property, data1, on='healpix', how='left')
-        merged = merged.fillna({name: 0})
-        merged[name] /= merged[area]
-        return merged
-    else:
-        print('No area or healpix column in given data')
-        return Property
-        
