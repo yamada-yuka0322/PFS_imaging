@@ -96,14 +96,9 @@ def main():
     
     # randoms or objects 
     prefix  =   f"{output_dir}/{args.kind}/tract_group"
-    if args.kind=='patchqa':
-        is_patches = True
-        doUnzip = False
-    else:
-        is_patches = False
-        prefix2 =   f"{output_dir}/{args.kind}/tract"
-        if not os.path.exists(prefix2):
-            os.system('mkdir -p %s' %prefix2)
+    prefix2 =   f"{output_dir}/{args.kind}/tract"
+    if not os.path.exists(prefix2):
+        os.system('mkdir -p %s' %prefix2)
         
     if not os.path.exists(prefix):
         os.system('mkdir -p %s' %prefix)

@@ -7,6 +7,111 @@ import os
 
 import re
 
+class Target(object):
+    """Container for stellar objects　in a single tract.
+
+    Attributes
+    ------------------------------------------------------
+    ra: array or None
+        ra of stars in degrees. 0~360 degrees
+
+    dec: array or None
+        Dec of stars in degrees.
+
+    mask: array of bool or None
+        updated bright stellar mask. True if "inside" the mask
+
+    Methods
+    ------------------------------------------------------
+    load_targets(tract, config):
+        Load cosmology targets and corresponding bright-star mask
+        for the specified tract. config is a dictionary of path read from the config.yaml file in the config directory
+        
+    load_targets(tractlist, config):
+        Load cosmology targets and corresponding bright-star mask
+        for all tract included in tractlist. 
+    """
+    def __init__(self):
+        self.ra = None
+        self.dec = None
+        self.mask = None
+        self.patch = None
+        
+    def load_targets(self, tract, config):
+        path = os.path.join(config["hsc"]["output_dir"], "galaxy", "tract")
+        filename = os.path.join(path, f"{tract}.fits")
+        
+        mask_path = os.path.join(config["Gaia"]["bsmask_dir"] , f"galaxy/{tract}.fits")
+
+        if os.path.exists(filename) and os.path.exists(mask_path):
+            with fits.open(filename) as hdu:
+                if len(hdu)==2:
+                    data = hdu[1].data
+                hsc = Cuts._prepare_hsc(data, dust_extinction='desi')
+                targets = Cuts.isCosmology(hsc)
+                    
+                self.ra = hsc[targets]['RA']%360
+                self.dec = hsc[targets]['DEC']
+                self.patch = hsc[targets]['PATCH']
+                    
+            with fits.open(mask_path) as hdu:
+                if len(hdu)==2:
+                    data = hdu[1].data
+                    self.mask = data['halo'][targets] | data['ghost'][targets] | data['blooming'][targets] #bright star mask. true if 'inside' mask
+                else:
+                    print(f'cannot open {mask_path}')
+    def load_all_targets(self, tractlist, config):
+        all_ra = []
+        all_dec = []
+        all_mask = []
+        all_patch = []
+        
+        for tract in tractlist:
+            ra, dec, patch, mask = load_target_tract(tract, config)
+            if ((ra is None)|(dec is None)|(patch is None)):
+                continue
+            elif (mask is None):
+                mask = np.zeros(len(ra), dtype=bool)
+            all_ra.append(list(ra))
+            all_dec.append(list(dec))
+            all_patch.append(list(patch))
+            all_mask.append(list(mask))
+        self.ra = np.array(all_ra)
+        self.dec = np.array(all_dec)
+        self.patch = np.array(all_patch)
+        self.mask = np.array(all_mask)
+        
+def load_target_tract(tract, config):
+    path = os.path.join(config["hsc"]["output_dir"], "galaxy", "tract")
+    filename = os.path.join(path, f"{tract}.fits")
+        
+    mask_path = os.path.join(config["Gaia"]["bsmask_dir"] , f"galaxy/{tract}.fits")
+
+    if os.path.exists(filename) and os.path.exists(mask_path):
+        with fits.open(filename) as hdu:
+            if len(hdu)==2:
+                data = hdu[1].data
+                hsc = Cuts._prepare_hsc(data, dust_extinction='desi')
+                targets = Cuts.isCosmology(hsc)
+                    
+                ra = hsc[targets]['RA']%360
+                dec = hsc[targets]['DEC']
+                patch = hsc[targets]['PATCH']
+            else:
+                print(f'cannot open {filename}')
+                return None, None, None, None
+                    
+        with fits.open(mask_path) as hdu:
+            if len(hdu)==2:
+                data = hdu[1].data
+                mask = data['halo'][targets] | data['ghost'][targets] | data['blooming'][targets] #bright star mask. true if 'inside' mask
+            else:
+                print(f'cannot open {mask_path}')
+                return ra, dec, patch, None
+        return ra, dec, patch, mask
+    
+    else:
+        return None, None, None, None
 class Star(object):
     """Container for stellar objects　in a single tract.
 
@@ -100,12 +205,10 @@ class Random(object):
         self.mask = None
         
     def load_random(self, tract, config):
-        #random_path = os.path.join(config["hsc"]["output_dir"], "random", "tract")
-        random_path = os.path.join(config["hsc"]["output_dir"], "tracts_ran")
+        random_path = os.path.join(config["hsc"]["output_dir"], "random", "tract")
         filename = os.path.join(random_path, f"{tract}.fits")
         
-        #mask_path = outdir = os.path.join(config["Gaia"]["bsmask_dir"] , f"random/{tract}.fits")
-        mask_path = outdir = os.path.join(config["Gaia"]["bsmask_dir"] , f"randoms/{tract}.fits")
+        mask_path = outdir = os.path.join(config["Gaia"]["bsmask_dir"] , f"random/{tract}.fits")
         
         if os.path.exists(filename) and os.path.exists(mask_path):
             with fits.open(filename) as hdu:
@@ -153,7 +256,7 @@ class Patches(object):
         self.property = None
     
     def load_patches(self, tract, config, property_list = ['gseeing', 'rseeing', 'iseeing', 'zseeing', 'yseeing', 'g_depth', 'r_depth', 'i_depth', 'z_depth', 'y_depth']):
-        path = os.path.join(config["hsc"]["output_dir"], "tracts_patch")
+        path = os.path.join(config["hsc"]["output_dir"],"patchqa", "tract")
         filename = os.path.join(path, f"{tract}.fits")
         if os.path.exists(filename):
             with fits.open(filename) as hdu:

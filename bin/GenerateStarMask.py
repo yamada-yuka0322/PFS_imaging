@@ -1,14 +1,9 @@
 import astropy.io.fits as fits
-from astropy.coordinates import SkyCoord
-import astropy.units as u
-from astropy.table import Table, vstack, unique, join
+import astropy.io.ascii as ascii
 
 import numpy as np
 from pathlib import Path
 import os
-
-from pfsimaging import imaging as Im
-from pfsimaging import Loader as loader
 
 from multiprocessing import Pool
 from functools import partial
@@ -18,6 +13,8 @@ from scipy.spatial import cKDTree
 import yaml
 
 import argparse
+
+from pfsimaging import Loader as loader
 
 autumn = None
 gal_ra = None
@@ -39,14 +36,16 @@ def main():
 
     tract_data = {}
 
-    autumn = Im.TractPatch("autumn")
-    spring = Im.TractPatch("spring")
+    autumn = loader.TractPatch("autumn")
+    spring = loader.TractPatch("spring")
 
     tract_data.update(autumn.data)
     tract_data.update(spring.data)
 
-    tract_list = autumn.get_tract()
-    tract_list.extend(spring.get_tract())
+    #tract_list = autumn.get_tract()
+    #tract_list.extend(spring.get_tract())
+    tractname=  './Tracttest.csv'
+    tract_list      =   ascii.read(tractname)['tract']
 
     config = {}
     if args.config is not None:
@@ -75,10 +74,10 @@ def main():
             continue
             
         adj_tracts = get_adjacent_tracts(tract_data, tract)
-        args = [(adj, _ra, _dec) for adj in adj_tracts]
+        attributes = [(adj, _ra, _dec) for adj in adj_tracts]
     
         with Pool(len(adj_tracts)) as p:
-            results = p.map(func, args)
+            results = p.map(func, attributes)
         
         mask_halo = np.zeros(len(_ra), dtype=bool)
         mask_ghost = np.zeros(len(_ra), dtype=bool)
