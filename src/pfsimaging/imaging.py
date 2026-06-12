@@ -46,11 +46,8 @@ def get_property_all(tractpatch, tractlist, dustmap, config):
     tractlist = np.array(tractlist)
     
     tractlist = tractlist[np.isin(tractlist, tractall)]
-
-    patches = loader.Patches()
-    patches.load_patches(property_name, config)
     
-    func = partial(get_property_tract, dustmap=dustmap, config = config, patches = patches)
+    func = partial(get_property_tract, config = config)
     if len(tractlist)==0:
         print(f"No tracts in {tractpatch.field}")
         return pd.DataFrame()
@@ -82,7 +79,7 @@ def get_property_all(tractpatch, tractlist, dustmap, config):
     
     
 
-def get_property_tract(tract, dustmap, config, patches):
+def get_property_tract(tract,  config):
     """function to get the property of the healpix within a single tract
 
     Parameters
@@ -90,14 +87,8 @@ def get_property_tract(tract, dustmap, config, patches):
     tract:int
     ID of tract considered
     
-    dustmap: list
-    dust map names to be applied ["desi", "desi-csfd", "csfd"]
-    
     config: dictionary
     dictionary of path read from the config.yaml file in the config directory
-    
-    patches: instance
-    instance of load.patch class. Includes the {g,r,i,z,y}-depth and {g,r,i,z,y}-seeing defined for each patch
 
     Output
     ------------------------------------------------
@@ -136,12 +127,11 @@ def get_property_tract(tract, dustmap, config, patches):
         .reset_index()
     )
 
-    patch_prop = band_property(tract, patches, df)
+    patch_prop = band_property(tract, config, df)
     if patch_prop is None:
         return None
     properties = pd.merge(properties, patch_prop, on='healpix', how='left')
     
-    properties = add_eff_area(mask, properties)
     #############star file name
     print(f'adding stellar density on {tract}')
     properties = add_star_count(properties, tract,config)
@@ -153,7 +143,7 @@ def to_little_endian(arr):
         return arr.byteswap().view(dt.newbyteorder('='))
     return arr
 
-def band_property(tract, patches, df):
+def band_property(tract, config, df):
     """
     function to add the g,r,i,z,y-depth and seeing of each healpixels
     
@@ -161,9 +151,6 @@ def band_property(tract, patches, df):
     ------------------------------------------
     tract: int
     ID of tract considered
-
-    patches: instance
-    instance of load.patch class. Includes the {g,r,i,z,y}-depth and {g,r,i,z,y}-seeing defined for each patch
     
     df: PdDataframe
     dataframe including the randoms in the concidered tract
@@ -178,7 +165,9 @@ def band_property(tract, patches, df):
     dataframe  of imaging properties for each randoms points
     defined by cross matching patch ID
     """
-    Property = patches.get_properties(tract)
+    patches = loader.Patches()
+    patches.load_patches(tract, config, property_name)
+    Property = patches.property
     
     if Property is None:
         print(f"patch column missing in tract {tract} property")
@@ -391,9 +380,10 @@ def get_target_density(targets, Property):
     with 'star' the total stellar count
     """
     if ('area' in Property.columns) and ('healpix' in Property.columns):
-        target_ra = targets['RA']
-        target_dec = targets['DEC']
-        healpix = hp.ang2pix(nside, target_ra, target_dec, nest=False, lonlat=True)
+        target_ra = targets.ra
+        target_dec = targets.dec
+        target_mask = ~ target.mask
+        healpix = hp.ang2pix(nside, target_ra[target_mask], target_dec[target_mask], nest=False, lonlat=True)
         
         # count the number of galaxies in each healpix
         _healpy, counts = np.unique(healpix, return_counts=True)
@@ -406,3 +396,24 @@ def get_target_density(targets, Property):
     else:
         print('No area or healpix column in given data')
         return Property
+    
+#######################################################################
+def anomaly():
+    ra_deg = 163.8
+    dec_deg = 0.2
+    radius_deg = 0.85
+
+    # 中心方向ベクトル
+    vec = hp.ang2vec(ra_deg, dec_deg, lonlat=True)
+
+    # 円内の healpix index
+    pix = hp.query_disc(
+        nside,
+        vec,
+        np.radians(radius_deg),
+        inclusive=False,
+        nest=False
+    )
+
+    return pix
+    
