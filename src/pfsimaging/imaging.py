@@ -1,6 +1,6 @@
 import numpy as np
 from astropy.io import fits
-from astropy.table import Table, vstack
+from astropy.table import Table, vstack, join
 import healpy as hp
 import os
 from multiprocessing import Pool
@@ -363,7 +363,7 @@ def get_imaging_property(config, tractlist = None, dustmaps = ['desi']):
 
 ######################################################################
 
-def get_target_density(targets, Property):
+def get_target_density(Targets, Property):
     """function to calculate target density for each healpixel
 
     Parameter
@@ -371,26 +371,32 @@ def get_target_density(targets, Property):
     targets:structured array
     output of pfstarget.isCosmology()
     
-    Property: pd dataframe with imaging properties of healpixels
+    Property: astropy Table with imaging properties of healpixels
     Must include 'healpix' and 'area' column
 
     Output
     ------------------------------------------------------
-    properties: pd dataframe with imaging properties of healpixels
+    properties: astropy Table with imaging properties of healpixels
     with 'star' the total stellar count
     """
     if ('area' in Property.columns) and ('healpix' in Property.columns):
-        target_ra = targets.ra
-        target_dec = targets.dec
-        target_mask = ~ target.mask
+        target_ra = Targets.ra
+        target_dec = Targets.dec
+        target_mask = ~ Targets.mask #True if outside the bright stellar mask
         healpix = hp.ang2pix(nside, target_ra[target_mask], target_dec[target_mask], nest=False, lonlat=True)
         
         # count the number of galaxies in each healpix
         _healpy, counts = np.unique(healpix, return_counts=True)
-        data1 = pd.DataFrame({'healpix':_healpy, 'target' : counts})
+        data1 = Table({'healpix':_healpy, 'target' : counts})
         
-        merged = pd.merge(Property, data1, on='healpix', how='left')
-        merged = merged.fillna({name: 0})
+        merged = join(
+            Property,
+            data1,
+            keys="healpix",
+            join_type="left",
+        )
+        
+        merged = merged.fillna({'target': 0})
         merged['target'] /= merged['area']
         return merged
     else:

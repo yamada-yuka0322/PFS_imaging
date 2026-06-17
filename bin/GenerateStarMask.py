@@ -1,5 +1,6 @@
 import astropy.io.fits as fits
 import astropy.io.ascii as ascii
+from astropy.table import Table, vstack
 
 import numpy as np
 from pathlib import Path
@@ -42,10 +43,10 @@ def main():
     tract_data.update(autumn.data)
     tract_data.update(spring.data)
 
-    #tract_list = autumn.get_tract()
-    #tract_list.extend(spring.get_tract())
-    tractname=  './Tracttest.csv'
-    tract_list      =   ascii.read(tractname)['tract']
+    tract_list = autumn.get_tract()
+    tract_list.extend(spring.get_tract())
+    #tractname=  './Tracttest.csv'
+    #tract_list      =   ascii.read(tractname)['tract']
 
     config = {}
     if args.config is not None:
@@ -59,17 +60,35 @@ def main():
 
     StarPath = config["Gaia"]["output_dir"]
     func = partial(process_tract, StarPath = StarPath)
+    
+    all_cols = []
+    all_tables = []
+    
+    if (args.kind == 'galaxy'):
+        Object = loader.Target(config)
+        print(f"{len(Object.ra)} targets downloaded")
+    elif (args.kind == 'star'):
+        Object = loader.Star()
+    elif (args.kind == 'random'):
+        Object = loader.Random()
 
     for tract in tract_list:
         filename = f"{tract}.fits"
         path = os.path.join(outdir , filename)
         if os.path.exists(path):
             print(f"bright star mask for tract {tract} exists")
-            continue
-        global _ra, _dec, _id
-        _ra, _dec, _id = GetObjects(tract, args.kind, config)
+            
+            # stack existing bsmasks for galaxies
+            if args.kind == "galaxy":
+                all_tables.append(Table.read(path))
 
-        if _ra is None:
+            continue
+            
+            
+        global _ra, _dec, _id
+        _ra, _dec, _id = GetObjects(tract, args.kind, config, Object)
+
+        if (_ra is None) or (len(_ra) == 0):
             print(f"{args.kind} file for tract {tract} does not exist")
             continue
             
@@ -89,17 +108,27 @@ def main():
             mask_blooming |= b
 
         print(f"Saving bright star mask for tract {tract}") 
-            
+
         cols = [
-            fits.Column(name='id', format='K', array=_id),   # int64
-            fits.Column(name='ra', format='D', array=_ra), # float64
-            fits.Column(name='dec', format='D', array=_dec), # float64
+            fits.Column(name='id', format='K', array=_id),
+            fits.Column(name='ra', format='D', array=_ra),
+            fits.Column(name='dec', format='D', array=_dec),
             fits.Column(name="halo", format="L", array=mask_halo),
             fits.Column(name="ghost", format="L", array=mask_ghost),
             fits.Column(name="blooming", format="L", array=mask_blooming),
         ]
+
+        hdu = fits.BinTableHDU.from_columns(cols)
+        hdu.writeto(path, overwrite=True)
         
-        fits.BinTableHDU.from_columns(cols).writeto(path, overwrite=True)
+        if args.kind == "galaxy":
+            all_tables.append(Table(hdu.data))
+            
+    if args.kind == "galaxy" and len(all_tables) > 0:
+        combined = vstack(all_tables)
+        combined_path = os.path.join(outdir, "all_tracts.fits")
+        combined.write(combined_path, overwrite=True)
+        print(f"Saved combined galaxy bright star mask: {combined_path}")
                 
 def process_tract(tasks, StarPath):
     #書き込むのはこのtractだけ
@@ -138,27 +167,23 @@ def GetStars(tract, path):
         print(f"Stellar file for tract {tract} does not exist")
         return None, None, None
 
-def GetPath(kind, config):
-    output_dir = Path(config["hsc"]["output_dir"]).expanduser()
-    path =   f"{output_dir}/{kind}/tract"
-    return path
     
-def GetObjects(tract, kind, config):
-    path = GetPath(kind, config)
-    filename = os.path.join(path, f"{tract}.fits")
-    if os.path.exists(filename):
-        with fits.open(filename) as hdu:
-            if len(hdu)==2:
-                data = hdu[1].data
-                ra = data['ra']%360
-                dec = data['dec']
-                ID = data['object_id']
-                return ra, dec, ID
-            else:
-                return None, None, None
-    else:
-        print(f"Error: {filename} does not exist.")
-        return None, None, None
+def GetObjects(tract, kind, config, Object):
+    if(kind == 'galaxy'):
+        ra, dec, _, _, ID = Object.get_tract(int(tract))
+        print(f"{len(ra)} targets in tract{tract}")
+    elif(kind=='star'):
+        Object.load_stars(tract, config)
+        ra = Object.ra
+        dec = Object.dec
+        ID = Object.objectID
+    elif(kind=='random'):
+        Object.load_random(tract, config)
+        ra = Object.ra
+        dec = Object.dec
+        ID = Object.objectID
+ 
+    return ra, dec, ID
     
 def get_adjacent_tracts(tract_dict, target_tract, tol=1.0):
 

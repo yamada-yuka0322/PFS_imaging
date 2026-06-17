@@ -15,12 +15,14 @@ git clone https://github.com/pfs-cosmo/pfstarget.git
 2. Make a config file under config/ directory to specify the
 ```bash 
 hsc:
-  output_dir: ##Directory path for the downloaded HSC
-  star_sql:   ##location of the star sql
+  target_dir: ##Directory path for the CO targets
+  random_dir: ##Directory path for the downloaded randoms
+  star_dir: ##Directory path for the downloaded stars
+  star_sql: ##location of the star sql
   patchqa_sql: ##location of the imaging property sql
 
 target_selection:
-  pfstarget:   ##path to the pfstarget repository
+  pfstarget: ##path to the pfstarget repository
   random_sql: ## location of the random sql
   galaxy_sql: ## location of the galaxy sql
 
@@ -36,19 +38,26 @@ Imaging:
    You will need a [STARS](https://stars2.naoj.hawaii.edu/) account for this.
 
 ```bash 
-python3 bin/hscReleaseQuery.py -u YOUR_STARS_ID -c configs/my_config.yaml --kind star
-python3 bin/hscReleaseQuery.py -u YOUR_STARS_ID -c configs/my_config.yaml --kind galaxy
-python3 bin/hscReleaseQuery.py -u YOUR_STARS_ID -c configs/my_config.yaml --kind random
-python3 bin/hscReleaseQuery.py -u YOUR_STARS_ID -c configs/my_config.yaml --kind patchqa
+python3 hscReleaseQuery.py -u YOUR_STARS_ID -c ../configs/my_config.yaml --kind star
+python3 hscReleaseQuery.py -u YOUR_STARS_ID -c ../configs/my_config.yaml --kind galaxy
+python3 hscReleaseQuery.py -u YOUR_STARS_ID -c ../configs/my_config.yaml --kind random
+python3 hscReleaseQuery.py -u YOUR_STARS_ID -c ../configs/my_config.yaml --kind patchqa
 ```
 
 4. In order to apply the updated stellar mask, you need to download the Gaia stars using bin/GetGaiaStars.py
 ```bash 
-python3 bin/GetGaiaStars.py -c configs/my_config.yaml
+python3 GetGaiaStars.py -c ../configs/my_config.yaml
 ```
 and generate Bright Stellar mask for the galaxies, randoms and stars.
 ```bash 
-python3 bin/hscReleaseQuery.py -c configs/my_config.yaml --kind star
-python3 bin/hscReleaseQuery.py -c configs/my_config.yaml --kind galaxy
-python3 bin/hscReleaseQuery.py -c configs/my_config.yaml --kind random
+python3 GenerateStarMask.py -c ../configs/my_config.yaml --kind star
+python3 GenerateStarMask.py -c ../configs/my_config.yaml --kind galaxy
+python3 GenerateStarMask.py -c ../configs/my_config.yaml --kind random
 ```
+
+## Calculating the imagingy systematic weights.
+1. You can calculate the imaging properties per pixels using get_imaging_property() function in imaging.py.
+An example is written in nb/GetImagingProperty.ipynb
+
+2. The imaging systematic weights can be calculated using train.py and Weights.py in bin/ file.
+An example is written in nb/ImagingWeights.ipynb

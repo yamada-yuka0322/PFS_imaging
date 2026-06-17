@@ -12,7 +12,9 @@ import optuna
 
 import os
 
-SAVE_DIR = "../output/optuna_runs"  # 保存先
+BASE_DIR = os.path.dirname(os.path.realpath(__file__))
+
+SAVE_DIR = os.path.join(BASE_DIR, "output", "optuna_runs")
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 class CustomLoss(nn.Module):

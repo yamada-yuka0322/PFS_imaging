@@ -1,13 +1,20 @@
 hsc:
-  output_dir: /lustre/work/YukaYamada/data/PFS/s23b_wide ##Directory path for the downloaded HSC
+  target_dir: /lustre/work/YukaYamada/data/PFS/test/pfs-ssp-co/ ##Directory path for the CO targets
+  random_dir: /lustre/work/jingjing.shi/pfs-LSS/random/HSC_random/database/s23-colorterm/tracts/ ##Directory path for the downloaded randoms
+  star_dir: /lustre/work/YukaYamada/data/PFS/star/ ##Directory path for the downloaded stars
   star_sql: sql/star_default.sql       ##location of the star sql
   patchqa_sql: sql/s23b_wide_patches.sql ##location of the imaging property sql
 
 target_selection:
   pfstarget: /home/YukaYamada/repository/PFS/pfstarget   ##path to the pfstarget repository
-  random_sql: /bin/hsc/sql/s23b_wide_randoms.sql      ## location of the random sql
-  galaxy_sql: /bin/hsc/sql/s23b_wide_pfs.sql        ## location of the galaxy sql
+  random_sql: bin/hsc/sql/s23b_wide_randoms.sql      ## location of the random sql
+  galaxy_sql: bin/hsc/sql/s23b_wide_pfs.sql        ## location of the galaxy sql
 
 Gaia:
   output_dir: /lustre/work/YukaYamada/data/Gaia_HSC ##Directory path for the downloaded Gaia stars
   bsmask_dir: /lustre/work/YukaYamada/data/PFS/s23b_bsmask/ ##Directory path to generate updated bright star masks for the galaxies and the randoms
+
+Imaging:
+  base_dir: /home/YukaYamada/repository/PFS/PFS_imaging ##base directory of the PFS_imaging repository
+  imaging_dir: output/properties ##path to save the imaging properties of each healpixels
+  weights_dir: output/weights ##path to save the imaging systematic weights
