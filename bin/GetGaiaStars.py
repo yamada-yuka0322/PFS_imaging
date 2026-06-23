@@ -1,18 +1,8 @@
 from astroquery.gaia import Gaia
 import os
-import sys
-import csv
-import json
-import time
-import astropy.io.fits as pyfits
-import getpass
 import argparse
-import urllib.request, urllib.error, urllib.parse
-import astropy.io.ascii as ascii
 
-from pathlib import Path
-
-from pfsimaging import imaging as Im
+from pfsimaging import Loader as loader
 
 import numpy as np
 
@@ -21,15 +11,23 @@ from functools import partial
 
 import yaml
 
-args = None
-config=None
-outdir = None
-
 def main():
+    """
+    function to download the Gaia stars for the bright stellar mask
+    
+    arguments
+    -----------------------------------------------------
+    config: path to YAML config file
+    The output file directory must be specified under config["Gaia"]["output_dir"]
+    
+    output
+    ------------------------------------------------------
+    fits file
+    The Gaia star catalog will be saved in a fits file per tract under config["Gaia"]["output_dir"] directory.
+    """
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("--config", "-c", default=None,
                         help="YAML config file containing paths and SQL settings")
-    global args, config, out_dir
     args = parser.parse_args()
     
     config = {}
@@ -44,8 +42,8 @@ def main():
     
     tract_data = {}
 
-    autumn = Im.TractPatch("autumn")
-    spring = Im.TractPatch("spring")
+    autumn = loader.TractPatch("autumn")
+    spring = loader.TractPatch("spring")
 
     tract_data.update(autumn.data)
     tract_data.update(spring.data)
@@ -57,15 +55,11 @@ def main():
     
     with Pool(processes=20) as pool:  # Adjust number of processes based on your CPU
         results = pool.map(func, tract_list)
-    
-    #for tract in tract_list:
-        #data = tract_data[int(tract)]
-        #corner1, corner0, corner3, corner2 = data['corner']
-       # tab = query_gaia_dr2_region(corner0, corner1, corner2, corner3)
-        #tab.write(f'/lustre/work/YukaYamada/data/Gaia_HSC/{tract}_stars.fits', format="fits", overwrite=True)
-        #print(f"downloaded tract: {tract}")
         
 def wrapper(tract, tract_data, outdir):
+    """
+    wrapper function to pass the corner of each tracts to query_gaia_dr2_region function
+    """
     filename = outdir / f"{tract}_stars.fits"
     if os.path.exists(filename):
         print(f"Stellar file in tract {tract} already exists")
@@ -83,21 +77,23 @@ def wrapper(tract, tract_data, outdir):
     
 def query_gaia_dr2_region(corner0, corner1, corner2, corner3, verbose=True):
     """
-    Gaia DR2 から、指定した円形領域内で base_where を満たす星をすべて取得する。
+    Function to get all stars within the tract polygon which passes the selection discribed in base_where
 
     Parameters
     ----------
-    ra_center_deg : float
-        中心の RA [deg] (ICRS)
-    dec_center_deg : float
-        中心の Dec [deg] (ICRS)
-    radius_deg : float
-        円の半径 [deg]
+    corner0: [ra, dec] corner of tract (lower right)
+    corner1: [ra, dec] corner of tract (lower left)
+    corner2: [ra, dec] corner of tract (upper left)
+    corner3: [ra, dec] corner of tract (upper right)
+    
+    return
+    ---------
+    astropy table of the downloaded stars
     """
 
-    # 使うテーブルを DR2 に固定
     Gaia.MAIN_GAIA_TABLE = "gaiadr2.gaia_source"
 
+    #Same as the selection used for the HSC bright stellar mask
     base_where = """
         gs.phot_g_mean_flux_over_error > 50
         AND gs.phot_bp_mean_flux_over_error > 20
@@ -115,6 +111,7 @@ def query_gaia_dr2_region(corner0, corner1, corner2, corner3, verbose=True):
     dec_min, dec_max = dec.min(), dec.max()
     crosses_zero = (_ra.max() - _ra.min()) > 180.0
 
+    #In case where the tract crosses ra = 0deg, the left and the right side would be defined as a different polygon
     if crosses_zero:
         print("cross 0")
         

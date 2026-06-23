@@ -8,6 +8,8 @@ from matplotlib.colors import ListedColormap
 
 import pandas as pd
 
+from pfsimaging import Laoder as loader
+
 def mask_edge(autumn, spring):
     # Healpix pixel centers
     nside = 256
@@ -24,6 +26,13 @@ def mask_edge(autumn, spring):
         [224.5, -1.0],
         [129, -1.0]
     ])
+    #polygon = np.array([
+        #[127, -3.0],
+        #[127, 6.0],
+        #[227, 6.0],
+        #[227, -3.0],
+        #[127, -3.0]
+        #])
 
     # 点群がポリゴン内にあるかどうかを判定
     spring_path = Path(polygon)
@@ -69,33 +78,117 @@ def mask_edge(autumn, spring):
     selected_pix = autumn['healpix'][autumn_mask]
     return autumn[autumn_mask], spring[spring_mask]
 
-def jackknife(autumn, spring, figure=False):
+def cut_edge(targets):
+    # Healpix pixel centers
+    ra = np.array(targets['RA'])
+    dec = np.array(targets['DEC'])
+
+    # 四角形のポリゴン（axs[0]の赤線内）
+    polygon = np.array([
+        [129, -1.0],
+        [129, 4.2],
+        [224.5, 4.2],
+        [224.5, -1.0],
+        [129, -1.0]
+    ])
+    #polygon = np.array([
+        #[127, -3.0],
+        #[127, 6.0],
+        #[227, 6.0],
+        #[227, -3.0],
+        #[127, -3.0]
+        #])
+
+    # 点群がポリゴン内にあるかどうかを判定
+    spring_path = Path(polygon)
+    points = np.vstack([ra, dec]).T
+    spring_mask = spring_path.contains_points(points)
+
+    ra = np.array(ra)
+    ra = ra - 360*(ra>300)
+    dec = np.array(dec)
+
+    # 四角形のポリゴン（axs[0]の赤線内）
+    polygon = np.array([
+        [-28, 0],
+        [-28, 6.1],
+        [-20, 6.1],
+        [-20, 5.0],
+        [3.0, 5.0],
+        [3.0, 4.2],
+        [10.0, 4.2],
+        [10.0, 5.0],
+        [22.5, 5.0],
+        [22.5, 4.2],
+        [38, 4.2],
+        [38, -5.9],
+        [30, -5.9],
+        [30, 0],
+        [-28, 0]
+    ])
+
+    # 点群がポリゴン内にあるかどうかを判定
+    autumn_path = Path(polygon)
+    points = np.vstack([ra, dec]).T
+    autumn_mask = autumn_path.contains_points(points)
+
+    return targets[spring_mask | autumn_mask]
+
+def mean_density(table):
     """
-    autumn: pandas dataframe
-    spring: pandas dataframe
-    """
-    autumn_df = autumn.copy()
-    #autumn_df = autumn.dropna(subset=['target'])
-    ra, dec = hp.pix2ang(nside=256, ipix = autumn_df['healpix'], lonlat=True)
-    ra = ra-360*(ra>300)
+    function to calculate the area weighted mean density
     
-    array = -1*np.ones(len(ra))
+    input
+    ------------------------------------------------------
+    table: astropy table
+    must included the target density 'target' and the effective area 'area' for each healpixel.
+    
+    output
+    -----------------------------
+    mu: float
+    effective area weighted mean density
+    """
+    x = table.to_pandas()
+    m = x['target'].notna() & np.isfinite(x['target']) & x['area'].notna() & np.isfinite(x['area'])
+    if not np.any(m):
+        return 0
+    area_sum = np.sum(x.loc[m, 'area'])
+    if area_sum == 0:
+        return 0
+    mu = np.sum(x.loc[m, 'target'] * x.loc[m, 'area']) / area_sum
+    return mu
+    
+
+def jackknife(table, figure=False):
+    """
+    function to assign jacknife index on each healpixels
+    
+    input
+    ------------------------------------------------------
+    table: 
+    """
+    table['jackknife'] = -1*np.ones(len(table))
+    ra, dec = hp.pix2ang(nside=256, ipix = table['healpix'], lonlat=True)
+    ra = ra - 360.0*(ra > 300.0) #ra range(-60 ~ 300)
+    
+    isAutumn = (ra>-35.0) & (ra < 45.0)
+    isSpring = (ra > 120.0) & (ra < 230.0) & (dec > -4.0) & (dec < 6.0)
+    
+    array = -1*np.ones(len(ra[isAutumn]))
 
     for i in range(8):
-        array[(ra>=np.min(ra)+i*8.5)&(ra<np.min(ra)+(i+1)*8.5)] = i
-    array[(ra>=np.min(ra)+i*8.5)&(dec>=-1)] = 7
-    array[(ra>25)&(dec<-1)] = 8
-    autumn_df['jackknife'] = array
+        array[(ra[isAutumn]>=np.min(ra[isAutumn])+i*8.5)&(ra[isAutumn]<np.min(ra[isAutumn])+(i+1)*8.5)] = i
+    array[(ra[isAutumn]>=np.min(ra[isAutumn])+i*8.5)&(dec[isAutumn]>=-1)] = 7
+    array[(ra[isAutumn]>25)&(dec[isAutumn]<-1)] = 8
+    table['jackknife'][isAutumn] = array
 
     #spring_df = spring.dropna(subset=['target'])
-    spring_df = spring.copy()
-    ra, dec = hp.pix2ang(nside=256, ipix = spring_df['healpix'], lonlat=True)
     
-    array = np.ones(len(ra))
+    array = np.ones(len(ra[isSpring]))
     for i in range(11):
-        array[(ra>=np.min(ra)+i*9)&(ra<np.min(ra)+(i+1)*9)] = i+9
+        array[(ra[isSpring]>=np.min(ra[isSpring])+i*9)&(ra[isSpring]<np.min(ra[isSpring])+(i+1)*9)] = i+9
     
-    spring_df['jackknife'] = array
+    table['jackknife'][isSpring] = array
     
     ##############################plot
     if figure:
@@ -123,35 +216,35 @@ def jackknife(autumn, spring, figure=False):
             ]
 
         # カラーマップとして登録
-        custom_cmap = ListedColormap(colors_hex)
+        #custom_cmap = ListedColormap(colors_hex)
 
-        fig, axs = plt.subplots(
-            2, 1, figsize=(12, 8),
-            gridspec_kw={"height_ratios": [1, 1], "hspace": 0.2}
-            )
+        #fig, axs = plt.subplots(
+            #2, 1, figsize=(12, 8),
+            #gridspec_kw={"height_ratios": [1, 1], "hspace": 0.2}
+            #)
 
-        coll1 = plot_map(spring_df, 'jackknife', 'spring', axs[0], vmin=0, vmax=20, cmap = custom_cmap)
-        coll2 = plot_map(autumn_df, 'jackknife', 'autumn', axs[1], vmin=0, vmax=20, cmap = custom_cmap)
+        #coll1 = plot_map(spring_df, 'jackknife', 'spring', axs[0], vmin=0, vmax=20, cmap = custom_cmap)
+        #coll2 = plot_map(autumn_df, 'jackknife', 'autumn', axs[1], vmin=0, vmax=20, cmap = custom_cmap)
 
-        axs[1].set_xlabel('RA [deg]', fontsize=20)
+        #axs[1].set_xlabel('RA [deg]', fontsize=20)
     
-        axs[0].grid()
-        axs[0].yaxis.label.set_position((axs[0].yaxis.label.get_position()[0], 0.35))
-        axs[1].grid()
-        path = '/home/YukaYamada/output/PFS/figure/'
-        plt.subplots_adjust(top=0.7, bottom=0.3, left=0.12, right=0.95)
-        plt.savefig(path+'jackknife.pdf', bbox_inches='tight', dpi=300)
-        plt.savefig(path+'jackknife.png', bbox_inches='tight', dpi=300)
-        plt.show()
+        #axs[0].grid()
+        #axs[0].yaxis.label.set_position((axs[0].yaxis.label.get_position()[0], 0.35))
+        #axs[1].grid()
+        #path = '/home/YukaYamada/output/PFS/figure/'
+        #plt.subplots_adjust(top=0.7, bottom=0.3, left=0.12, right=0.95)
+        #plt.savefig(path+'jackknife.pdf', bbox_inches='tight', dpi=300)
+        #plt.savefig(path+'jackknife.png', bbox_inches='tight', dpi=300)
+        #plt.show()
     
-    return autumn_df, spring_df
+    return table
     
     
 ###############################################################################################################
 
 def jackknife_ang_ratio(
-    df, key, mean_density, target_col, bin_edges_deg, 
-    nside=256, nest=False, eps=1e-15
+    table, key, target_col, bin_edges_deg, 
+    nside=256, eps=1e-15
 ):
     """
     Estimator: ( <w_sg>^2 ) / <w_ss>,  where
@@ -161,21 +254,17 @@ def jackknife_ang_ratio(
 
     Parameters
     ----------
-    df : pandas.DataFrame
-        Columns must include ['healpix','area','jackknife', target_col, key].
-        If there are multiple rows per healpix, they will be aggregated (area-weighted).
+    table : table
+        Columns must include ['healpix','area', target_col, key].
     key : str
-        Name of the systematics column (scalar per pixel).
-    mean_density : float
-        Global mean of target_col (same definition you used upstream).
-    target_col : str
-        Name of the target density column (scalar per pixel).
+        Name of the imaging systematics column.
+    target_col: string
+        name of the target density column 
+        (either 'target' for the observed target or 'weighted_target' for the weighted target density)
     bin_edges_deg : 1D array-like
         Angular bin edges in degrees (monotonic increasing).
     nside : int
         HEALPix nside (default 256).
-    nest : bool
-        True if 'healpix' indices are NESTED. Default False (RING).
     eps : float
         Small number to stabilize divisions.
 
@@ -189,33 +278,24 @@ def jackknife_ang_ratio(
         Jackknife standard deviation per bin (leave-one-out regions).
     """
 
-    # ---- 0) Aggregate to unique healpix (area-weighted) to avoid duplicates ----
-    df = df.dropna()
-    if df['healpix'].duplicated().any():
-        g = df.groupby('healpix', as_index=False)
-        agg = g.apply(lambda d: pd.Series({
-            'area': d['area'].sum(),
-            'jackknife': d['jackknife'].iloc[0],  # assume consistent region per pixel
-            target_col: np.average(d[target_col], weights=d['area']),
-            key: np.average(d[key], weights=d['area'])
-        })).reset_index(drop=True)
-    else:
-        agg = df[['healpix','area','jackknife',target_col,key]].copy()
+    mean_density = mean_density(table)
+    table = jackknife(table) #apply jacknife ID
+    df = table.to_pandas()
 
     # ---- 1) Prepare deltas ----
     # delta_i: target density contrast (w.r.t provided mean_density)
-    delta_i = agg[target_col].to_numpy() / float(mean_density) - 1.0
+    delta_i = df[target_col].to_numpy() / float(mean_density) - 1.0
 
     # delta_s: systematics contrast relative to area-weighted global mean
-    glob_mean_key = np.average(agg[key].to_numpy(), weights=agg['area'].to_numpy())
-    delta_s = agg[key].to_numpy() / glob_mean_key - 1.0
+    glob_mean_key = np.average(df[key].to_numpy(), weights=df['area'].to_numpy())
+    delta_s = df[key].to_numpy() / glob_mean_key - 1.0
     
     #random
-    delta_r = np.random.normal(loc = np.mean(delta_i), scale = np.std(delta_i), size = len(agg['healpix']))
+    delta_r = np.random.normal(loc = np.mean(delta_i), scale = np.std(delta_i), size = len(df['healpix']))
 
-    hpix = agg['healpix'].to_numpy()
-    area = agg['area'].to_numpy()
-    jk_label = agg['jackknife'].to_numpy()
+    hpix = df['healpix'].to_numpy()
+    area = df['area'].to_numpy()
+    jk_label = df['jackknife'].to_numpy()
 
     # ---- 2) Geometry ----
     # Get angular vectors of pixel centers
@@ -290,10 +370,8 @@ def jackknife_ang_ratio(
 
         # w_sg for each pair
         wsg_pair = 0.5 * (delta_s[ii] * delta_i[jj] + delta_s[jj] * delta_i[ii])
-        #wsg_pair = (delta_s[ii] * delta_i[jj] - delta_s[ii] * delta_r[jj] - delta_i[jj] * delta_r[ii] + delta_r[ii] * delta_r[jj]) / (delta_r[ii] * delta_r[jj] + eps) 
         # w_ss for each pair
         wss_pair = delta_s[ii] * delta_s[jj]
-        #wss_pair = (delta_s[ii] * delta_s[jj] - delta_s[ii] * delta_r[jj] - delta_s[jj] * delta_r[ii] + delta_r[ii] * delta_r[jj])/ (delta_r[ii] * delta_r[jj] + eps)
 
         # Weighted sums per bin
         sum_w = np.bincount(bb, minlength=nbins)
@@ -340,20 +418,51 @@ def jackknife_ang_ratio(
     return bin_centers, est_full, jk_std
 
 ########################################################################
-def jackknife_dens(df, key, target_col, mean_density, n_jack=20, bins=10, min_count=50):
-    jacks = np.unique(df['jackknife'])
-    n_jack = len(jacks)
-    df = df.copy()
-    df['jackknife_block'] = np.random.randint(0, n_jack, size=len(df))
+def jackknife_dens(table, key, target_col = 'target', n_jack=20, bins=10, min_count=50):
+    """
+    Parameters
+    ------------------------------------------------------------------------------------
+    table: astropy table
+    table including all imaging attributes specified in key, the target density and the effective area
+    
+    key: string
+    name of the imaging attribute
+    
+    target_col: string
+    name of the target density column 
+    (either 'target' for the observed target or 'weighted_target' for the weighted target density)
+    
+    n_jack:int
+    number of jacknife region
+    
+    bins: int
+    number of bins for the imaging attributes
+    
+    min_count: minimum number of data that must be included for a single bin
+    
+    output
+    -------------------------------------------------------------------------
+    bin_center: numpy array
+    center of the applied bins
+    
+    mean: numpy array
+    mean target density for each bin
+    
+    std: numpy array
+    jacknife error bar for each bin
+    """
+    table['jackknife_block'] = np.random.randint(0, n_jack, size=len(table))
+    mean_density = mean_density(table)
+    df = table.to_pandas()
 
-    # bin エッジを固定
+    # bin data into 10 groups for each imaging attributes
     _, fixed_bins = np.histogram(df[key], bins=bins)
     bin_centers = (fixed_bins[:-1] + fixed_bins[1:]) / 2.0
     df[f'{key}_bin'] = pd.cut(df[key], bins=fixed_bins)
 
     def weighted_mean_rel(x):
-        # 有効データ（target と area の両方が有限）だけを使う
-        m = x[target_col].notna() & np.isfinite(x[target_col]) & x['area'].notna() & np.isfinite(x['area'])
+        # calculate the weighted mean for a single imaging attribute bin
+        m = x['target'].notna() & np.isfinite(x[target_col]) & x['area'].notna() & np.isfinite(x['area'])
         if not np.any(m):
             return pd.Series({'count': 0, 'mean': np.nan})
         area_sum = np.sum(x.loc[m, 'area'])
@@ -362,25 +471,24 @@ def jackknife_dens(df, key, target_col, mean_density, n_jack=20, bins=10, min_co
         mu = np.sum(x.loc[m, target_col] * x.loc[m, 'area']) / area_sum
         return pd.Series({'count': int(m.sum()), 'mean': mu / mean_density - 1.0})
 
-    # 全データでのサマリー（binごと）
+    # calculate the mean for all bins
     summary = df.groupby(f'{key}_bin').apply(weighted_mean_rel).reset_index()
 
-    # ジャックナイフ：各LOOでのmean（binごと）
+    # calculate error bars using jacknife
     means_all = []
     for i in jacks:
         jack_df = df[df['jackknife_block'] != i].copy()
-        # 既に bin 列はあるが、念のため同じ境界で再カットしてもOK
         jack_df[f'{key}_bin'] = pd.cut(jack_df[key], bins=fixed_bins)
         _summary = jack_df.groupby(f'{key}_bin').apply(lambda x: weighted_mean_rel(x)[['mean']]).reset_index()
         means_all.append(_summary['mean'].values)
 
     means_all = np.array(means_all)  # shape: (n_jack, n_bins)
-    theta_bar = np.nanmean(means_all, axis=0)  # LOO平均の平均
-    # JK 標準偏差（(n-1)/n * Σ(θ_i - θ̄)^2 の平方根）
-    jk_var = (n_jack - 1) / n_jack * np.nanmean((means_all - theta_bar[None, :])**2, axis=0)
-    jk_std = np.sqrt(jk_var)
+    theta_bar = np.nanmean(means_all, axis=0)  # the mean of all jacks
 
-    # サンプル数でフィルタ（有効データ数ベース）
+    jk_var = (n_jack - 1) / n_jack * np.nanmean((means_all - theta_bar[None, :])**2, axis=0)
+    jk_std = np.sqrt(jk_var)# jacknife error
+
+    # remove bins with data points smaller than min_count
     mask = summary['count'] >= min_count
 
     return bin_centers[mask.values], summary.loc[mask, 'mean'].values, jk_std[mask.values]

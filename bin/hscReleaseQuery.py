@@ -1,26 +1,51 @@
 #!/usr/bin/env python
 # Based on
 # https://hsc-gitlab.mtk.nao.ac.jp/ssp-software/data-access-tools/-/blob/master/dr3/catalogQuery/hscSspQuery3.py
+
 import os
-import sys
-import csv
 import json
 import time
-import astropy.io.fits as pyfits
 import getpass
 import argparse
 import urllib.request, urllib.error, urllib.parse
 import astropy.io.ascii as ascii
+import astropy.io.fits as pyfits
 import yaml
 from pathlib import Path
 
 version =   20190924.1
-args    =   None
-doDownload  =   True
-doUnzip =   True
 diffver =   '-colorterm'
+release_version =   'dr4'
+doDownload = True
+doUnzip = True
+
+"""
+This script downloads HSC catalog data from the HSC SSP CAS API.
+
+Workflow:
+1. Read a YAML config file to locate the SQL template and output directory.
+2. Read the target tract list from Tracttest.csv.
+3. Replace the {$tract} placeholder in the SQL file with the tract IDs.
+4. Submit the SQL query as a catalog job to the HSC CAS server.
+5. Wait until the job finishes.
+6. Download the result as one file per tract group.
+7. Split the downloaded FITS table into separate FITS files for each tract.
+
+Expected SQL template:
+    The SQL file must contain the placeholder {$tract}, which will be replaced
+    by a comma-separated list of tract IDs.
+
+Output structure:
+    output_dir/kind/tract_group/
+        Downloaded files for each tract group.
+    output_dir/kind/tract/
+        FITS files separated by individual tract.
+"""
 
 def chunkNList(seq, num):
+    """
+    fuction to divide the tracts into num groups.
+    """
     avg = len(seq) / float(num)
     out = []
     last = 0.0
@@ -43,6 +68,9 @@ def GetSQLPath(kind, config):
     return path
 
 def GetNgroups(kind):
+    """
+    number of tract group. All the tracts in the same tract group would be downloaded at once.
+    """
     if (kind == 'patchqa'):
         return 1
     else:
@@ -72,7 +100,6 @@ def main():
                         choices=["star", "patchqa", "galaxy", "random"],
                         help="which catalog to download")
 
-    global args,release_version,prefix,prefix2,ngroups, doUnzip
     args = parser.parse_args()
     release_year   =   's23'
 
@@ -90,36 +117,39 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # tracts for DR4 S23B
-    release_version =   'dr4'
     ngroups =   GetNgroups(args.kind)
-    tractname=  './Tracttest.csv'
+    tractname=  config['hsc']['tractlist']
     
     # randoms or objects 
-    prefix  =   f"{output_dir}/{args.kind}/tract_group"
-    prefix2 =   f"{output_dir}/{args.kind}/tract"
+    prefix  =   f"{output_dir}/{args.kind}/tract_group" #directory to save the downloaded tract groups
+    prefix2 =   f"{output_dir}/{args.kind}/tract" #directory to save the objects separated per each tract.
     if not os.path.exists(prefix2):
         os.system('mkdir -p %s' %prefix2)
         
     if not os.path.exists(prefix):
         os.system('mkdir -p %s' %prefix)
     
-    global sql
     sql         =   sql_file.read_text()
     tracts      =   ascii.read(tractname)['tract']
     tracts2     =   chunkNList(tracts,ngroups)
     if doDownload:
-        global credential
-        credential  =   {'account_name': args.user, 'password': getPassword()}
+        credential  =   {'account_name': args.user, 'password': getPassword(args)}
         for ig,tractL in enumerate(tracts2):
             print('Group: %s' %ig)
-            downloadTracts(ig,tractL)
+            downloadTracts(ig,tractL, prefix, credential, sql, args)
             if doUnzip:
                 print('unzipping group: %s' %ig)
-                separateTracts(ig,tractL)
+                separateTracts(ig,tractL, prefix, prefix2, args)
     
     return
 
-def separateTracts(ig,tractL):
+def separateTracts(ig,tractL, prefix, prefix2, args):
+    """
+    function to separate the downloaded objects into tracts.
+    """
+    if args.out_format != "fits":
+        raise ValueError("separateTracts currently supports only fits format")
+    
     infname     =   '%s.%s'%(ig,args.out_format)
     infname     =   os.path.join(prefix,infname)
     if not os.path.exists(infname):
@@ -140,49 +170,55 @@ def separateTracts(ig,tractL):
         del fits
     return
 
-def downloadTracts(ig, tractL):
+def downloadTracts(ig, tractL, prefix, credential, sql, args):
+    """
+    Submit a query to the HSC CAS server and download the catalog.
+
+    The placeholder {$tract} in the SQL template is replaced by the
+    tract IDs contained in tractL.
+
+    Parameters
+    ----------
+    ig : int
+        Tract group index.
+
+    tractL : list
+        List of tract IDs included in the group.
+
+    prefix : str
+        Output directory.
+
+    credential : dict
+        User account and password.
+
+    sql : str
+        SQL template.
+
+    args : argparse.Namespace
+
+    Outputs
+    -------
+    prefix/ig.fits
+    """
     tractStr    =   map(str,tractL)
     tname       =   "'{0}'".format("', '".join(tractStr))
     job         =   None
-    sqlU        =   sql.replace('{$tract}',tname)
+    sqlU        =   sql.replace('{$tract}',tname)　# Replace {$tract} in the SQL template with the tract list
     outfname = '%s.%s'%(ig,args.out_format)
     outfname    =   os.path.join(prefix,outfname)
     if os.path.exists(outfname):
         print('already have output')
         return
     print('querying data')
-    job         =   submitJob(credential, sqlU, args.out_format)
-    blockUntilJobFinishes(credential, job['id'])
+    job         =   submitJob(credential, sqlU, args)
+    blockUntilJobFinishes(credential, job['id'], args)
     print('downloading data')
     with open(outfname, "wb") as fileOut:
-        download(credential, job["id"], fileOut)
+        download(credential, job["id"], fileOut, args)
     if args.delete_job:
-        deleteJob(credential, job['id'])
+        deleteJob(credential, job['id'], args)
     print('closing output file')
     return
-
-def downloadAll():
-    job         =   None
-    outfname = 'patches.%s'%(args.out_format)
-    outfname    =   os.path.join(prefix,outfname)
-    if os.path.exists(outfname):
-        print('already have output')
-        return
-    print('querying data')
-    job         =   submitJob(credential, sql, args.out_format)
-    blockUntilJobFinishes(credential, job['id'])
-    print('downloading data')
-    with open(outfname, "wb") as fileOut:
-        download(credential, job["id"], fileOut)
-    if args.delete_job:
-        deleteJob(credential, job['id'])
-    print('closing output file')
-    fileBuffer.close()
-    fileOut.close()
-    del fileBuffer
-    del fileOut
-    return
-    
 
 class QueryError(Exception):
     pass
@@ -197,11 +233,11 @@ def httpPost(url, postData, headers):
     res = urllib.request.urlopen(req)
     return res
 
-def submitJob(credential, sql, out_format):
+def submitJob(credential, sql, args):
     url = args.api_url + 'submit'
     catalog_job = {
         'sql'                     : sql,
-        'out_format'              : out_format,
+        'out_format'              : args.out_format,
         'include_metainfo_to_body': True,
         'release_version'         : release_version,
     }
@@ -210,7 +246,7 @@ def submitJob(credential, sql, out_format):
     job = json.load(res)
     return job
 
-def jobStatus(credential, job_id):
+def jobStatus(credential, job_id, args):
     url = args.api_url + 'status'
     postData = {'credential': credential, 'id': job_id}
     res = httpJsonPost(url, postData)
@@ -218,12 +254,40 @@ def jobStatus(credential, job_id):
     return job
 
 
-def blockUntilJobFinishes(credential, job_id):
+def blockUntilJobFinishes(credential, job_id, args):
+    """
+    Wait until the submitted HSC CAS job finishes.
+
+    This function periodically checks the job status using the HSC CAS API.
+    excessive requests to the server, with a maximum interval of 30 seconds.
+
+    Parameters
+    ----------
+    credential : dict
+        User account information containing account name and password.
+
+    job_id : int
+        Job ID returned by submitJob().
+
+    args : argparse.Namespace
+        Command line arguments.
+
+    Raises
+    ------
+    QueryError
+        Raised if the job status becomes 'error'.
+
+    Returns
+    -------
+    None
+        Returns after the job status becomes 'done'.
+    """
+
     max_interval = 0.5 * 60 # sec.
     interval = 1
     while True:
         time.sleep(interval)
-        job = jobStatus(credential, job_id)
+        job = jobStatus(credential, job_id, args)
         if job['status'] == 'error':
             raise QueryError('query error: ' + job['error'])
         if job['status'] == 'done':
@@ -234,7 +298,7 @@ def blockUntilJobFinishes(credential, job_id):
     print('blocking over')
     return
 
-def download(credential, job_id, out):
+def download(credential, job_id, out, args):
     url     =   args.api_url + 'download'
     postData=   {'credential': credential, 'id': job_id}
     res     =   httpJsonPost(url, postData)
@@ -247,13 +311,13 @@ def download(credential, job_id, out):
             break
     return
 
-def deleteJob(credential, job_id):
+def deleteJob(credential, job_id, args):
     url = args.api_url + 'delete'
     postData = {'credential': credential, 'id': job_id}
     httpJsonPost(url, postData)
     return
 
-def getPassword():
+def getPassword(args):
     password_from_envvar = os.environ.get(args.password_env, '')
     if password_from_envvar != '':
         return password_from_envvar

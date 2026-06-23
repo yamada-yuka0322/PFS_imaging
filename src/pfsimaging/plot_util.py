@@ -24,9 +24,7 @@ names = {
     'y_depth':"$\it{y}$-depth",
     
     'star':"star",
-    'star_log':'log(stellar density)',
-    'extinction':"extinction",
-    'desi_extinction':"extinction"
+    'desi-csfd_extinction':"extinction"
 }
 
 def plot_map(df, target, field, vmin=None, vmax=None, cmap='viridis', colorbar=True):
@@ -46,10 +44,19 @@ def plot_map(df, target, field, vmin=None, vmax=None, cmap='viridis', colorbar=T
     """
     
     fig, ax = plt.subplots(figsize=(12,4))
+    healpix = df['healpix']
+    targets = df[target]
+    
+    nside = 256
+    npix = hp.nside2npix(nside)
     
     if field =='spring':
         ramin = 125
         ramax = 230
+        
+        ra, dec = hp.pix2ang(nside, healpix, lonlat=True)
+        mask = (ra>ramin)&(ra < ramax)
+        
         ax.set_ylim(-4, 7)
         
         yticks = np.array([0, 5])
@@ -57,15 +64,17 @@ def plot_map(df, target, field, vmin=None, vmax=None, cmap='viridis', colorbar=T
     if field=='autumn':
         ramin=-35
         ramax=45
+        
+        ra, dec = hp.pix2ang(nside, healpix, lonlat=True)
+        ra -= 360.0*(ra > 180)
+        mask = (ra>ramin)&(ra < ramax)
+        
         ax.set_ylim(-8, 8)
         yticks = np.array([-5, 0, 5])
         xticks = np.array([-20, 0, 20, 40])
         
-    nside = 256
-    npix = hp.nside2npix(nside)
-
-    valid_pix = df['healpix']
-    values = df[target]
+    valid_pix = healpix[mask]
+    values = targets[mask]
 
     verts = []
     colors = []
@@ -122,7 +131,7 @@ def plot_ang(autumn, spring, targets, field='all'):
     for name, target in targets.items():
         _data = Im.get_target_density(target, _data, name = name)
         
-    keys = ["gseeing", "rseeing", "iseeing", "zseeing", "yseeing", "g_depth", "r_depth", "i_depth", "z_depth", "y_depth", "desi_extinction", "star_log"]
+    keys = ["gseeing", "rseeing", "iseeing", "zseeing", "yseeing", "g_depth", "r_depth", "i_depth", "z_depth", "y_depth", "desi-csfd_extinction", "star_log"]
     fig, axes = plt.subplots(2, 6, figsize=(30, 10))
     
     cmap = plt.get_cmap("tab10")
@@ -174,6 +183,113 @@ def plot_ang(autumn, spring, targets, field='all'):
     
     return
 
+def plot_ang1(autumn, spring, targets, ax, field='all', keys = ["star_log"]):
+    data = prepare_data(autumn, spring, cut_edge=True, do_jackknife=True)
+    if (field=='autumn'):
+        data = data[data['jackknife'] <= 8]
+    if (field=='spring'):
+        data = data[data['jackknife'] > 8]
+        
+    _data = data.copy()
+    for name, target in targets.items():
+        _data = Im.get_target_density(target, _data, name = name)
+    
+    cmap = plt.get_cmap("tab10")
+    bins = np.linspace(0, 5, 11)
+    
+    for i, key in enumerate(keys):
+        
+        ax.set_xticks([0, 1, 2, 3, 4])
+        ax.set_xticklabels(['0.0', '1.0', '2.0', '3.0', '4.0'], fontsize=20)
+        ax.set_xlabel('[deg]', fontsize=20)
+
+        ax.yaxis.set_tick_params(labelsize=20)
+    
+        if 'seeing' in key:
+            xlabel = 'arcsec'
+        if 'depth' in key:
+            xlabel = 'mag'
+        if 'extinction' in key:
+            xlabel = 'mag'
+        if 'star' in key:
+            _data[key] = np.log10(_data['star'])
+            xlabel = 'log deg$^{-2}$'
+
+        for j, name in enumerate(targets.keys()):
+            mean_density =  np.sum(_data[name]*_data['area'])/np.sum(_data['area'])
+            x, mean, std = stat.jackknife_ang_ratio(_data, key, mean_density, name, bins)
+            mean *= 1e3
+            std *= 1e3
+            ax.fill_between(x, mean - std, mean + std, color=cmap(j), alpha=0.3)
+            ax.plot(x, mean, color=cmap(j), label=name)
+            
+        _x = np.linspace(0.0, 5.0, 25)
+        _y = np.zeros(25)
+        ax.plot(_x, _y, ls='--', color="cyan")
+        
+        ax.text(0.95, 0.15, names[key], ha='right', va='top', transform=ax.transAxes, fontsize=20)
+    
+        handles, labels = ax.get_legend_handles_labels()
+        
+        ax.set_ylabel(r'$\omega^{g,s} \times 10^3$', fontsize=20)
+        #fig.legend(handles, labels, loc='lower center', bbox_to_anchor=(0.5, -0.05), ncol=4, fontsize=20)
+    #plt.tight_layout()
+    
+    return
+
+def plot_ang2(autumn, spring, targets, ax, field='all', keys = ["star_log"], area = 'area'):
+    data = prepare_data(autumn, spring, cut_edge=True, do_jackknife=True)
+    if (field=='autumn'):
+        data = data[data['jackknife'] <= 8]
+    if (field=='spring'):
+        data = data[data['jackknife'] > 8]
+        
+    _data = data.copy()
+    for name, target in targets.items():
+        _data = Im.get_target_density1(target, _data, name = name, area = area)
+    
+    cmap = plt.get_cmap("tab10")
+    bins = np.linspace(0, 5, 11)
+    
+    for i, key in enumerate(keys):
+        
+        ax.set_xticks([0, 1, 2, 3, 4])
+        ax.set_xticklabels(['0.0', '1.0', '2.0', '3.0', '4.0'], fontsize=20)
+        ax.set_xlabel('[deg]', fontsize=20)
+
+        ax.yaxis.set_tick_params(labelsize=20)
+    
+        if 'seeing' in key:
+            xlabel = 'arcsec'
+        if 'depth' in key:
+            xlabel = 'mag'
+        if 'extinction' in key:
+            xlabel = 'mag'
+        if 'star' in key:
+            _data[key] = np.log10(_data['star'])
+            xlabel = 'log deg$^{-2}$'
+
+        for j, name in enumerate(targets.keys()):
+            mean_density =  np.sum(_data[name]*_data[area])/np.sum(_data[area])
+            x, mean, std = stat.jackknife_ang_ratio(_data, key, mean_density, name, bins)
+            mean *= 1e3
+            std *= 1e3
+            ax.fill_between(x, mean - std, mean + std, color=cmap(j), alpha=0.3)
+            ax.plot(x, mean, color=cmap(j), label=name)
+            
+        _x = np.linspace(0.0, 5.0, 25)
+        _y = np.zeros(25)
+        ax.plot(_x, _y, ls='--', color="cyan")
+        
+        ax.text(0.95, 0.15, names[key], ha='right', va='top', transform=ax.transAxes, fontsize=20)
+    
+        handles, labels = ax.get_legend_handles_labels()
+        
+        ax.set_ylabel(r'$\omega^{g,s} \times 10^3$', fontsize=20)
+        #fig.legend(handles, labels, loc='lower center', bbox_to_anchor=(0.5, -0.05), ncol=4, fontsize=20)
+    #plt.tight_layout()
+    
+    return
 #####################################################################################################
 def plot_dens(autumn, spring, targets, field='all'):
     data = prepare_data(autumn, spring, cut_edge=True, do_jackknife=True)
@@ -186,7 +302,7 @@ def plot_dens(autumn, spring, targets, field='all'):
     for name, target in targets.items():
         _data = Im.get_target_density(target, _data, name = name)
         
-    keys = ["gseeing", "rseeing", "iseeing", "zseeing", "yseeing", "g_depth", "r_depth", "i_depth", "z_depth", "y_depth", "desi_extinction", "star_log"]
+    keys = ["gseeing", "rseeing", "iseeing", "zseeing", "yseeing", "g_depth", "r_depth", "i_depth", "z_depth", "y_depth", "desi-csfd_extinction", "star_log"]
     fig, axes = plt.subplots(2, 6, figsize=(30, 10), sharey=True)
     
     cmap = plt.get_cmap("tab10")
@@ -246,7 +362,7 @@ def plot_PS(autumn, spring, targets, field='all'):
     for name, target in targets.items():
         _data = Im.get_target_density(target, _data, name = name)
     
-    keys = ["gseeing", "rseeing", "iseeing", "zseeing", "yseeing", "g_depth", "r_depth", "i_depth", "z_depth", "y_depth", "desi_extinction", "star_log"]
+    keys = ["gseeing", "rseeing", "iseeing", "zseeing", "yseeing", "g_depth", "r_depth", "i_depth", "z_depth", "y_depth", "desi-csfd_extinction", "star_log"]
     fig, axes = plt.subplots(2, 6, figsize=(30, 10), sharey=True)
     cmap = plt.get_cmap("tab10")
         

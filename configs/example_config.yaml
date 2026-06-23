@@ -1,9 +1,10 @@
 hsc:
   target_dir: /lustre/work/YukaYamada/data/PFS/test/pfs-ssp-co/ ##Directory path for the CO targets
   random_dir: /lustre/work/jingjing.shi/pfs-LSS/random/HSC_random/database/s23-colorterm/tracts/ ##Directory path for the downloaded randoms
-  star_dir: /lustre/work/YukaYamada/data/PFS/star/ ##Directory path for the downloaded stars
+  star_dir: /lustre/work/YukaYamada/data/PFS/s23-colorterm/tracts_star ##Directory path for the downloaded stars
   star_sql: sql/star_default.sql       ##location of the star sql
   patchqa_sql: sql/s23b_wide_patches.sql ##location of the imaging property sql
+  tractlist: /home/YukaYamada/repository/PFS/pfstarget/bin/hsc/sql/TractInfoS23.csv ##file which contains the tract list to be downloaded
 
 target_selection:
   pfstarget: /home/YukaYamada/repository/PFS/pfstarget   ##path to the pfstarget repository
@@ -17,4 +18,5 @@ Gaia:
 Imaging:
   base_dir: /home/YukaYamada/repository/PFS/PFS_imaging ##base directory of the PFS_imaging repository
   imaging_dir: output/properties ##path to save the imaging properties of each healpixels
+  train_dir: output/optuna_runs
   weights_dir: output/weights ##path to save the imaging systematic weights

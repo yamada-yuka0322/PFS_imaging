@@ -119,10 +119,8 @@ class Star(object):
                     r = data['r_input_count']
                     i = data['i_input_count']
                     z = data['z_input_count']
-                    inpatch = data['detect_ispatchinner']
-                    intract = data['detect_istractinner']
                     
-                    mask = (g >= 4) & (r >= 4) & (i >= 5) & (z >= 5) & inpatch & intract
+                    mask = (g >= 4) & (r >= 4) & (i >= 5) & (z >= 5)
                     
                     self.ra = data['ra'][mask]%360
                     self.dec = data['dec'][mask]
@@ -184,25 +182,26 @@ class Random(object):
             with fits.open(filename) as hdu:
                 if len(hdu)==2:
                     data = hdu[1].data
-                    no_overlap = data['detect_ispatchinner'] & data['detect_istractinner']
-                    self.patch = data['patch'][no_overlap]
-                    self.ra = data['ra'][no_overlap]
-                    self.dec = data['dec'][no_overlap]
-                    self.objectID = data['object_id'][no_overlap]
-                    self.mask = Cuts.random_masking(data[no_overlap]) # standard mask. True if 'inside' the masked region
+                    #no_overlap = data['detect_ispatchinner'] & data['detect_istractinner']
+                    self.patch = data['patch']
+                    self.ra = data['ra']
+                    self.dec = data['dec']
+                    self.objectID = data['object_id']
+                    #self.mask = Cuts.random_masking(data) # standard mask. True if 'inside' the masked region
+                else:
+                    print(f'cannot open {filename}')
                     
         if os.path.exists(mask_path):             
             with fits.open(mask_path) as hdu:
                 if len(hdu)==2:
                     data = hdu[1].data
-                    bsmaskID = data['id'][no_overlap]
-                    bsmask = data['halo'][no_overlap] | data['ghost'][no_overlap] | data['blooming'][no_overlap] #True if inside mask
+                    bsmaskID = data['id']
+                    bsmask = data['halo'] | data['ghost'] | data['blooming'] #True if inside mask
                     bsmask = match_bsmask(ID, bsmaskID, bsmask)
-                    self.mask = bsmask | mask #input count, bright star and pixel related masks. True if 'inside' the masked region
+                    #self.mask = bsmask | mask #input count, bright star and pixel related masks. True if 'inside' the masked region
+                    self.mask = bsmask
                 else:
                     print(f'cannot open {mask_path}')
-        else:
-            print(f'cannot find {filename}')
 
 class Patches(object):
     """Container for imaging properties defined per patch　in a single tract.

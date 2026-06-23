@@ -17,22 +17,35 @@ import argparse
 
 from pfsimaging import Loader as loader
 
-autumn = None
-gal_ra = None
-gal_dec = None
-gal_id = None
-
 STAR_CACHE = {}
 
 def main():
+    """
+    function to generate the updated bright stellar mask
+    
+    arguments
+    -----------------------------------------------------
+    config: path to YAML config file
+    The output file directory must be specified under config["Gaia"]["bsmask_dir"]
+    The downloaded Gaia star directory must be specified under config["Gaia"]["bsmask_dir"]
+    
+    output
+    ------------------------------------------------------
+    fits file:
+    column
+    id: HSC object_id
+    ra: HSC ra
+    dec: HSC dec
+    halo: true if inside bright star halo
+    ghost: true if inside bright star ghost
+    blooming: true if inside bright star blooming
+    """
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("--kind", required = True,
                         choices=["star", "galaxy", "random"],
                         help="which object to generate mask")
     parser.add_argument("--config", "-c", required = True,
                         help="YAML config file containing paths")
-
-    global args
     args = parser.parse_args()
 
     tract_data = {}
@@ -58,19 +71,19 @@ def main():
     outdir = os.path.join(config["Gaia"]["bsmask_dir"] , args.kind)
     Path(outdir).mkdir(parents=True, exist_ok=True)
 
-    StarPath = config["Gaia"]["output_dir"]
-    func = partial(process_tract, StarPath = StarPath)
+    starPath = config["Gaia"]["output_dir"]
+    func = partial(process_tract, starPath = starPath)
     
     all_cols = []
     all_tables = []
     
     if (args.kind == 'galaxy'):
-        Object = loader.Target(config)
-        print(f"{len(Object.ra)} targets downloaded")
+        _object = loader.Target(config)
+        print(f"{len(_object.ra)} targets downloaded")
     elif (args.kind == 'star'):
-        Object = loader.Star()
+        _object = loader.Star()
     elif (args.kind == 'random'):
-        Object = loader.Random()
+        _object = loader.Random()
 
     for tract in tract_list:
         filename = f"{tract}.fits"
@@ -85,13 +98,14 @@ def main():
             continue
             
             
-        global _ra, _dec, _id
-        _ra, _dec, _id = GetObjects(tract, args.kind, config, Object)
+        _ra, _dec, _id = GetObjects(tract, args.kind, config, _object)
 
         if (_ra is None) or (len(_ra) == 0):
             print(f"{args.kind} file for tract {tract} does not exist")
             continue
             
+        #We also need bright stars adjacent to the considered tract because 
+        # stars in the adjacent tract can make a masked region in the target tract
         adj_tracts = get_adjacent_tracts(tract_data, tract)
         attributes = [(adj, _ra, _dec) for adj in adj_tracts]
     
@@ -130,12 +144,13 @@ def main():
         combined.write(combined_path, overwrite=True)
         print(f"Saved combined galaxy bright star mask: {combined_path}")
                 
-def process_tract(tasks, StarPath):
-    #書き込むのはこのtractだけ
-    #星はadjacent tractもとってくる
+def process_tract(tasks, starPath):
+    """
+    Wrapper to pass bright Gaia stars to GetMask function
+    """
     tract, _ra, _dec = tasks
     
-    star_ra, star_dec, star_imag = GetStars(tract, StarPath)
+    star_ra, star_dec, star_imag = GetStars(tract, starPath)
     
     if (star_ra is None):
         mask = np.zeros(len(_ra), dtype=bool)
@@ -146,6 +161,9 @@ def process_tract(tasks, StarPath):
     return _halo, _ghost, _blooming
 
 def GetStars(tract, path):
+    """
+    function to load Gaia stars downloaded using GetGaiaStars.py
+    """
     StarPath = os.path.join(path, f"{tract}_stars.fits")
     if os.path.exists(StarPath):
         hdu = fits.open(StarPath)
@@ -168,25 +186,50 @@ def GetStars(tract, path):
         return None, None, None
 
     
-def GetObjects(tract, kind, config, Object):
+def GetObjects(tract, kind, config, _object):
+    """
+    function to load target galaxy, HSC star or randoms in tract
+    
+    Parameter
+    --------------
+    tract : int specify which tract to load
+    kind: string (galaxy, star or random)
+    config: dictionary that includes the path to the downloaded data
+    _object: instance (either loader.Target, loader.Star or loader.Random)
+    """
     if(kind == 'galaxy'):
-        ra, dec, _, _, ID = Object.get_tract(int(tract))
+        ra, dec, _, _, ID = _object.get_tract(int(tract))
         print(f"{len(ra)} targets in tract{tract}")
     elif(kind=='star'):
-        Object.load_stars(tract, config)
-        ra = Object.ra
-        dec = Object.dec
-        ID = Object.objectID
+        _object.load_stars(tract, config)
+        ra = _object.ra
+        dec = _object.dec
+        ID = _object.objectID
     elif(kind=='random'):
-        Object.load_random(tract, config)
-        ra = Object.ra
-        dec = Object.dec
-        ID = Object.objectID
+        _object.load_random(tract, config)
+        ra = _object.ra
+        dec = _object.dec
+        ID = _object.objectID
  
     return ra, dec, ID
     
 def get_adjacent_tracts(tract_dict, target_tract, tol=1.0):
-
+    """
+    function to get the adjacent tracts
+    
+    Parameter
+    ---------
+    tract_dict: dictionary
+    includes the cooridinate of all tracts
+    
+    target_tract: int
+    target tract ID
+    
+    output
+    ------------
+    neighbors: list(int)
+    list of adjacent tract ID
+    """
     if target_tract not in tract_dict:
         raise ValueError(f"{target_tract} is not in tract_dict")
 
@@ -195,12 +238,11 @@ def get_adjacent_tracts(tract_dict, target_tract, tol=1.0):
     tract_ids = list(tract_dict.keys())
     centers = np.array([tract_dict[t]['center'] for t in tract_ids])
 
-    # 差分
+    # distance between the tract center
     dra_raw = np.abs(centers[:, 0] - target_center[0])
-    dra = np.minimum(dra_raw, 360.0 - dra_raw)   # ⭐ ここが重要
+    dra = np.minimum(dra_raw, 360.0 - dra_raw)
     ddec = np.abs(centers[:, 1] - target_center[1])
-
-    # ステップ幅推定
+    
     nonzero_dra = np.sort(np.unique(np.round(dra[dra > 0], 6)))
     nonzero_ddec = np.sort(np.unique(np.round(ddec[ddec > 0], 6)))
 
@@ -211,6 +253,7 @@ def get_adjacent_tracts(tract_dict, target_tract, tol=1.0):
     step_dec = nonzero_ddec[0]
 
     neighbors = []
+    #defining all tract with central distance smaller then 1deg for both ra and dec
     for t, dx, dy in zip(tract_ids, dra, ddec):
 
         cond_ra = (abs(dx - step_ra) < tol) or (dx < tol)
@@ -222,11 +265,41 @@ def get_adjacent_tracts(tract_dict, target_tract, tol=1.0):
     return sorted(neighbors)
 
 def GetMask(star_ra, star_dec, star_imag, gal_ra, gal_dec):
+    """
+    Judge whether an object is inside a bright star halo, ghost or blooming
+    
+    Parameter
+    ----------
+    star_ra: np.array(float)
+    ra of all stars in the specified tract and the adjecent tracts
+    
+    star_dec: np.array(float)
+    dec of all stars in the specified tract and the adjecent tracts
+    
+    star_dec: np.array(float)
+    estimated HSC i-mag of all stars in the specified tract and the adjecent tracts
+    
+    gal_ra: np.array(float)
+    ra of the all the target object in the target tract
+    
+    gal_dec: np.array(float)
+    dec of the all the target object in the target tract
+    
+    output
+    ------------
+    mask_halo: np.array(bool)
+    true if the target object is in any of the bright star halo
+    
+    mask_ghost: np.array(bool)
+    true if the target object is in any of the bright star ghost
+    
+    mask_blooming: np.array(bool)
+    true if the target object is in any of the bright star blooming
+    """
     star_ra = star_ra%360
     gal_ra = gal_ra%360
-    #raを0~360に入れる
+
     if(((gal_ra.max() - star_ra.min())>180.0) or ((star_ra.max() - gal_ra.min())>180.0)):
-        #ra=0.0を跨いでいる場合 -180~180に折り返す
         star_ra = np.where(star_ra>180.0, star_ra - 360.0, star_ra)
         gal_ra = np.where(gal_ra>180.0, gal_ra - 360.0, gal_ra)
         
@@ -237,6 +310,7 @@ def GetMask(star_ra, star_dec, star_imag, gal_ra, gal_dec):
     mask_ghost = np.zeros(len(gal_ra), dtype=bool)
     mask_blooming = np.zeros(len(gal_ra), dtype=bool)
 
+    #I'll write the reasoning of this analytic mask size fuction in github issue
     for ra, dec, imag in zip(star_ra, star_dec, star_imag):
 
         # ===== halo =====
