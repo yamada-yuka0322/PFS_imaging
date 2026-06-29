@@ -15,7 +15,7 @@ from pathlib import Path
 
 version =   20190924.1
 diffver =   '-colorterm'
-release_version =   'dr4'
+release_version =   'dr4-citus'
 doDownload = True
 doUnzip = True
 
@@ -56,9 +56,9 @@ def chunkNList(seq, num):
 
 def GetSQLPath(kind, config):
     if (kind=='star'):
-        path = "../" + config["hsc"]["star_sql"]
+        path = "../sql/star_default.sql"
     elif (kind=='patchqa'):
-        path = "../" + config["hsc"]["patchqa_sql"]
+        path = "../sql/s23b_wide_patches.sql"
     elif (kind == 'random'):
         path = os.path.join(config["target_selection"]["pfstarget"], config["target_selection"]["random_sql"])
     elif (kind == 'galaxy'):
@@ -74,7 +74,7 @@ def GetNgroups(kind):
     if (kind == 'patchqa'):
         return 1
     else:
-        return 1
+        return 40
 
 def main():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -110,7 +110,7 @@ def main():
 
     if args.kind is not None and config:
         sql_file = Path(GetSQLPath(args.kind, config))
-        output_dir = Path(config["hsc"]["output_dir"]).expanduser()
+        output_dir = Path(config["data"][f"{args.kind}_dir"]).expanduser()
     else:
         parser.error("--kind and --config are required")
 
@@ -118,11 +118,11 @@ def main():
     
     # tracts for DR4 S23B
     ngroups =   GetNgroups(args.kind)
-    tractname=  config['hsc']['tractlist']
+    tractname=  config['tractlist']
     
     # randoms or objects 
-    prefix  =   f"{output_dir}/{args.kind}/tract_group" #directory to save the downloaded tract groups
-    prefix2 =   f"{output_dir}/{args.kind}/tract" #directory to save the objects separated per each tract.
+    prefix  =   f"{output_dir}/tract_group" #directory to save the downloaded tract groups
+    prefix2 =   f"{output_dir}/tract" #directory to save the objects separated per each tract.
     if not os.path.exists(prefix2):
         os.system('mkdir -p %s' %prefix2)
         
@@ -203,12 +203,15 @@ def downloadTracts(ig, tractL, prefix, credential, sql, args):
     tractStr    =   map(str,tractL)
     tname       =   "'{0}'".format("', '".join(tractStr))
     job         =   None
-    sqlU        =   sql.replace('{$tract}',tname)　# Replace {$tract} in the SQL template with the tract list
+    
+    # Replace {$tract} in the SQL template with the tract list
+    sqlU        =   sql.replace('{$tract}',tname)
     outfname = '%s.%s'%(ig,args.out_format)
     outfname    =   os.path.join(prefix,outfname)
     if os.path.exists(outfname):
         print('already have output')
         return
+    print(f"downloading tracts: {tractL}")
     print('querying data')
     job         =   submitJob(credential, sqlU, args)
     blockUntilJobFinishes(credential, job['id'], args)

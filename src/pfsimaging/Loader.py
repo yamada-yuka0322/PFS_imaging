@@ -7,6 +7,13 @@ import os
 
 import re
 
+"""
+data containerの決め事
+Target, Star, Randomはinitの段階ではmain observationでかかったmaskをかける
+maskに入るのは追加のmask、つまりbgmaskとbsmask
+
+effective area calculation用のtotal randomは別でloadする
+"""
 class Target(object):
     """Container for stellar objects　in a single tract.
 
@@ -35,7 +42,7 @@ class Target(object):
         self.mask = np.zeros(len(self.ra))
         
     def load_bsmask(self, config):
-        bsmask_file = os.path.join(config["Gaia"]["bsmask_dir"] , 'galaxy', "all_tracts.fits")
+        bsmask_file = os.path.join(config["bsmask"]["target_bsmask"] , "s23b_ssp_co_targets_bsmask.fits")
         if os.path.exists(bsmask_file):
             with fits.open(bsmask_file) as hdu:
                 data = hdu[1].data   
@@ -51,6 +58,9 @@ class Target(object):
             
         else:
             print(f"does not have {bsmask_file}. Run GenerateStarMask.py")
+            
+    def load_bgmask(self, config):
+        print('bgmask not implemented yet')
         
         
     def get_tract(self, tract):
@@ -58,7 +68,7 @@ class Target(object):
         return self.ra[inTract], self.dec[inTract], self.patch[inTract], self.mask[inTract], self.objectID[inTract]
         
 def load_targets(config):
-    filename = os.path.join(config["hsc"]["target_dir"], "s23b_ssp_co_targets.fits")
+    filename = config["data"]["target_file"]
     
     if os.path.exists(filename):
         with fits.open(filename) as hdu:
@@ -98,49 +108,54 @@ class Star(object):
         Load stellar objects and corresponding bright-star mask
         for the specified tract. config is a dictionary of path read from the config.yaml file in the config directory
     """
-    def __init__(self):
-        self.ra = None
-        self.dec = None
-        self.mask = None
-        self.patch = None
-        self.objectID = None
+    def __init__(self, tract, config):
+        self.tract = tract
+        self.ra, self.dec, self.patch, self.objectID = load_stars(tract, config)
+        if(self.ra is None):
+            self.mask = None
+        else:
+            self.mask = np.zeros_like(self.ra, dtype=bool)
         
-    def load_stars(self, tract, config):
-        filename = os.path.join(config["hsc"]["star_dir"], f"{tract}.fits")
-        
-        mask_path = os.path.join(config["Gaia"]["bsmask_dir"] , f"star/{tract}.fits")
-
-        if os.path.exists(filename):
-            with fits.open(filename) as hdu:
-                if len(hdu)==2:
-                    data = hdu[1].data
-                    ID =data['object_id']
-                    g = data['g_input_count']
-                    r = data['r_input_count']
-                    i = data['i_input_count']
-                    z = data['z_input_count']
-                    
-                    mask = (g >= 4) & (r >= 4) & (i >= 5) & (z >= 5)
-                    
-                    self.ra = data['ra'][mask]%360
-                    self.dec = data['dec'][mask]
-                    self.patch = data['patch'][mask]
-                    self.objectID = data['object_id'][mask]
-                    self.mask = np.zeros(len(self.ra))
-                    
-                else:
-                    print(f'cannot open {filename}')
-              
-        if os.path.exists(mask_path):
-            with fits.open(mask_path) as hdu:
+    def load_bsmask(self, config):
+        maskfile = os.path.join(config["bsmask"]["star_bsmask"], f"{self.tract}.fits")
+        if os.path.exists(maskfile):
+            with fits.open(maskfile) as hdu:
                 if len(hdu)==2:
                     data = hdu[1].data
                     bsmaskID = data['id']
-                    bsmask = data['halo'][mask] | data['ghost'][mask] | data['blooming'][mask] #bright star mask. true if 'inside' mask
-                    self.mask = match_bsmask(ID, bsmaskID, bsmask)
+                    bsmask = data['halo'] | data['ghost'] | data['blooming'] #bright star mask. true if 'inside' mask
+                    self.mask |= match_bsmask(self.objectID, bsmaskID, bsmask)
                 else:
-                    print(f'cannot open {mask_path}')
+                    print(f'{maskfile} does not have objects')
+        else:
+            print(f'cannot open {maskfile}')
+            
+    def load_bgmask(self, config):
+        print('bgmask not implemented yet')
+        
+        
+def load_stars(tract, config):
+    filename = os.path.join(config["data"]["star_dir"], f"{tract}.fits")
+    if os.path.exists(filename):
+        with fits.open(filename) as hdu:
+            if len(hdu)==2:
+                data = hdu[1].data
+                ID =data['object_id']
+                g = data['g_input_count']
+                r = data['r_input_count']
+                i = data['i_input_count']
+                z = data['z_input_count']
                     
+                mask = (g >= 4) & (r >= 4) & (i >= 5) & (z >= 5)
+                    
+                ra = data['ra'][mask]%360
+                dec = data['dec'][mask]
+                patch = data['patch'][mask]
+                objectID = data['object_id'][mask]
+                    
+                return ra, dec, patch, objectID
+            else:
+                print(f"no objects in {filename}")                   
             
 class Random(object):
     """Container for HSC randoms　in a single tract.
@@ -166,42 +181,101 @@ class Random(object):
         for the specified tract. config is a dictionary of path read from the config.yaml file in the config directory
     """
     
-    def __init__(self):
-        self.ra = None
-        self.dec = None
-        self.patch = None
-        self.mask = None
-        self.objectID = None
-        
-    def load_random(self, tract, config):
-        filename = os.path.join(config["hsc"]["random_dir"], f"{tract}.fits")
-        
-        mask_path = os.path.join(config["Gaia"]["bsmask_dir"] , f"random/{tract}.fits")
-        
-        if os.path.exists(filename):
-            with fits.open(filename) as hdu:
-                if len(hdu)==2:
-                    data = hdu[1].data
-                    #no_overlap = data['detect_ispatchinner'] & data['detect_istractinner']
-                    self.patch = data['patch']
-                    self.ra = data['ra']
-                    self.dec = data['dec']
-                    self.objectID = data['object_id']
-                    #self.mask = Cuts.random_masking(data) # standard mask. True if 'inside' the masked region
-                else:
-                    print(f'cannot open {filename}')
-                    
-        if os.path.exists(mask_path):             
-            with fits.open(mask_path) as hdu:
+    def __init__(self, tract, config):
+        self.tract = tract
+        self.ra, self.dec, self.patch, self.objectID = load_random(tract, config)
+        if(self.ra is None):
+            self.mask = None
+        else:
+            self.mask = np.zeros_like(self.ra, dtype=bool)
+            
+    def load_bsmask(self, config):
+        maskfile = os.path.join(config["bsmask"]["random_bsmask"], f"{self.tract}.fits")
+        if os.path.exists(maskfile):
+            with fits.open(maskfile) as hdu:
                 if len(hdu)==2:
                     data = hdu[1].data
                     bsmaskID = data['id']
-                    bsmask = data['halo'] | data['ghost'] | data['blooming'] #True if inside mask
-                    bsmask = match_bsmask(ID, bsmaskID, bsmask)
-                    #self.mask = bsmask | mask #input count, bright star and pixel related masks. True if 'inside' the masked region
-                    self.mask = bsmask
+                    bsmask = data['halo'] | data['ghost'] | data['blooming'] #bright star mask. true if 'inside' mask
+                    self.mask |= match_bsmask(self.objectID, bsmaskID, bsmask)
                 else:
-                    print(f'cannot open {mask_path}')
+                    print(f'{maskfile} does not have objects')
+        else:
+            print(f'cannot open {maskfile}')
+            
+    def load_bgmask(self, config):
+        print('bgmask not implemented yet')
+        
+def load_random(tract, config):
+    filename = os.path.join(config["data"]["random_dir"], f"{tract}.fits")
+    if os.path.exists(filename):
+        with fits.open(filename) as hdu:
+            if len(hdu)==2:
+                data = hdu[1].data
+                #no_overlap = data['detect_ispatchinner'] & data['detect_istractinner']
+                patch = data['patch']
+                ra = data['ra']
+                dec = data['dec']
+                objectID = data['object_id']
+                mask = mask_random(data) # standard mask. True if 'inside' the masked region
+                return ra[~mask], dec[~mask], patch[~mask], objectID[~mask]
+            else:
+                print(f'{filename} does not have data')
+    else:
+        print(f'cannot open {filename}')
+    return None, None, None, None
+
+def mask_random(data):
+    mask = (data['g_mask_brightstar_halo']  |
+            data['r_mask_brightstar_halo']  |
+            data['i_mask_brightstar_halo']  |
+            data['z_mask_brightstar_halo']  |
+            data['g_mask_brightstar_ghost'] |
+            data['r_mask_brightstar_ghost'] |
+            data['i_mask_brightstar_ghost'] |
+            data['z_mask_brightstar_ghost']
+           )
+    return mask
+        
+        
+def load_random_all(tract, config):
+    filename = os.path.join(config["data"]["random_dir_masked"], f"{tract}.fits")
+    if os.path.exists(filename):
+        with fits.open(filename) as hdu:
+            if len(hdu)==2:
+                data = hdu[1].data
+                ra = data['ra']
+                dec = data['dec']
+                patch = data['patch']
+                ID = data['object_id']
+            else:
+                print(f'{filename} does not have data')
+                ra = np.array([])
+                dec = np.array([])
+                patch = np.array([])
+                ID = np.array([])
+    else:
+        print(f'cannot open {filename}')
+        ra = np.array([])
+        dec = np.array([])
+        patch = np.array([])
+        ID = np.array([])
+        
+    filename = os.path.join(config["data"]["random_dir"], f"{tract}.fits")
+    if os.path.exists(filename):
+        with fits.open(filename) as hdu:
+            if len(hdu)==2:
+                data = hdu[1].data
+                ra = np.append(ra, np.array(data['ra']))
+                dec = np.append(dec, np.array(data['dec']))
+                patch = np.append(patch, np.array(data['patch']))
+                ID = np.append(ID, np.array(data['object_ID']))
+            else:
+                print(f'{filename} does not have data')
+    else:
+        print(f'cannot open {filename}')
+    return ra, dec, patch, ID
+
 
 class Patches(object):
     """Container for imaging properties defined per patch　in a single tract.
@@ -229,7 +303,7 @@ class Patches(object):
         self.property = None
     
     def load_patches(self, tract, config, property_list = ['gseeing', 'rseeing', 'iseeing', 'zseeing', 'yseeing', 'g_depth', 'r_depth', 'i_depth', 'z_depth', 'y_depth']):
-        path = os.path.join(config["hsc"]["output_dir"],"patchqa", "tract")
+        path = os.path.join(config["data"]["patchqa_dir"], "tract")
         filename = os.path.join(path, f"{tract}.fits")
         if os.path.exists(filename):
             with fits.open(filename) as hdu:
@@ -248,9 +322,9 @@ class Patches(object):
                     self.property = pd.DataFrame(properties)
                     
 def match_bsmask(inputID, bsmaskID, bsmask):
-    # id -> mask の辞書
+    # id -> mask dictionary
     mask_dict = dict(zip(bsmaskID, bsmask))
-    # self.object_id の順番に並べる
+    # self.object_id order
     mask = np.array(
         [mask_dict.get(objid, False) for objid in inputID],
         dtype=bool

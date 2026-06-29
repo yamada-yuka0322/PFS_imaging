@@ -1,22 +1,25 @@
-hsc:
-  target_dir: /lustre/work/YukaYamada/data/PFS/test/pfs-ssp-co/ ##Directory path for the CO targets
-  random_dir: /lustre/work/jingjing.shi/pfs-LSS/random/HSC_random/database/s23-colorterm/tracts/ ##Directory path for the downloaded randoms
-  star_dir: /lustre/work/YukaYamada/data/PFS/s23-colorterm/tracts_star ##Directory path for the downloaded stars
-  star_sql: sql/star_default.sql       ##location of the star sql
-  patchqa_sql: sql/s23b_wide_patches.sql ##location of the imaging property sql
-  tractlist: /home/YukaYamada/repository/PFS/pfstarget/bin/hsc/sql/TractInfoS23.csv ##file which contains the tract list to be downloaded
+data:
+  star_dir: /lustre/work/YukaYamada/data/PFS/s23-colorterm/star ##Directory path for the downloaded HSC stars
+  random_dir_masked: /lustre/work/jingjing.shi/pfs-LSS/random/HSC_random/database_fail_fcfd_quality_mask/s23-colorterm/tracts ##Directory path for the downloaded HSC randoms
+  random_dir: /lustre/work/jingjing.shi/pfs-LSS/random/HSC_random/database/s23-colorterm/tracts
+  target_file: /lustre/work/YukaYamada/data/PFS/test/pfs-ssp-co/s23b_ssp_co_targets.fits ##path to the pfs co targets (output of pfstarget)
+  patchqa_dir: /lustre/work/YukaYamada/data/PFS/s23-colorterm/patchqa ##Directory path for the downloaded HSC patchqa
 
-target_selection:
-  pfstarget: /home/YukaYamada/repository/PFS/pfstarget   ##path to the pfstarget repository
-  random_sql: bin/hsc/sql/s23b_wide_randoms.sql      ## location of the random sql
-  galaxy_sql: bin/hsc/sql/s23b_wide_pfs.sql        ## location of the galaxy sql
+bsmask:
+  star_bsmask: /lustre/work/YukaYamada/data/PFS/s23-colorterm/bsmask/star
+  random_bsmask: /lustre/work/YukaYamada/data/PFS/s23-colorterm/bsmask/random
+  target_bsmask: /lustre/work/YukaYamada/data/PFS/test/pfs-ssp-co #path to the target bright star mask
+  
+bgmask:
+  star_bgmask: /lustre/work/YukaYamada/data/PFS/s23-colorterm/bgmask/star
+  random_bgmask: /lustre/work/YukaYamada/data/PFS/s23-colorterm/bgmask/random
+  target_bgmask: /lustre/work/YukaYamada/data/PFS/test/pfs-ssp-co/s23b_ssp_co_targets_bgmask.fits #path to the target bright star mask
+  
+Gaia_bs: /lustre/work/YukaYamada/data/Gaia_HSC ##Directory path for the downloaded Gaia stars
 
-Gaia:
-  output_dir: /lustre/work/YukaYamada/data/Gaia_HSC ##Directory path for the downloaded Gaia stars
-  bsmask_dir: /lustre/work/YukaYamada/data/PFS/s23b_bsmask/ ##Directory path to generate updated bright star masks for the galaxies and the randoms
-
-Imaging:
-  base_dir: /home/YukaYamada/repository/PFS/PFS_imaging ##base directory of the PFS_imaging repository
-  imaging_dir: output/properties ##path to save the imaging properties of each healpixels
-  train_dir: output/optuna_runs
-  weights_dir: output/weights ##path to save the imaging systematic weights
+out_dir:
+  imaging: /lustre/work/YukaYamada/data/PFS/output/imaging #Directory path for the imaging properties
+  optuna: /lustre/work/YukaYamada/data/PFS/output/optuna #Directory path for the optuna output
+  weights: /lustre/work/YukaYamada/data/PFS/output/weights #Directory path to store the imaging systematic weights
+  
+tractlist: /home/YukaYamada/repository/PFS/pfstarget/bin/hsc/sql/TractInfoS23.csv

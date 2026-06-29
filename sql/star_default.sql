@@ -61,38 +61,6 @@ SELECT
 	f2.i_psfflux_flag as i_psf_flag,
 	f2.z_psfflux_flag as z_psf_flag,
 	f2.y_psfflux_flag as y_psf_flag,
-	
-        -- Measured photometry for star-galaxy separation 
-        -- cmodel magnitudes 
-        m1.g_cmodel_mag as g_meas_cmodel_mag,
-        m1.r_cmodel_mag as r_meas_cmodel_mag,
-        m1.i_cmodel_mag as i_meas_cmodel_mag,
-        m1.z_cmodel_mag as z_meas_cmodel_mag,
-        m1.y_cmodel_mag as y_meas_cmodel_mag,
-        m1.i_cmodel_flag as i_meas_cmodel_flag,
-        
-        -- psf magnitudes 
-        m2.g_psfflux_mag as g_meas_psf_mag,
-        m2.r_psfflux_mag as r_meas_psf_mag,
-        m2.i_psfflux_mag as i_meas_psf_mag,
-        m2.z_psfflux_mag as z_meas_psf_mag,
-        m2.y_psfflux_mag as y_meas_psf_mag,
-        m2.i_psfflux_flag as i_meas_psf_flag,
-
-
-        -- aperture photometry used for low surface brightness object cut
-        -- (Issue #10) 
-        m3.g_apertureflux_10_mag,
-        m3.r_apertureflux_10_mag,
-        m3.i_apertureflux_10_mag,
-        m3.z_apertureflux_10_mag,
-        m3.y_apertureflux_10_mag,
-        
-        m3.g_apertureflux_10_flag,
-        m3.r_apertureflux_10_flag,
-        m3.i_apertureflux_10_flag,
-        m3.z_apertureflux_10_flag,
-        m3.y_apertureflux_10_flag,
 
 
 	-- 6. y-band flags
@@ -104,26 +72,54 @@ SELECT
     
     --overlaps
     f1.detect_istractinner,
-    f1.detect_ispatchinner
+    f1.detect_ispatchinner,
+    
+-- 5. Detailed bright star masks 
+        -- It is also possible to gather more detailed information about the bright star masks here.
+        msk.g_mask_brightstar_halo, 
+        msk.g_mask_brightstar_ghost,
+        msk.g_mask_brightstar_blooming,
+
+        msk.r_mask_brightstar_halo,
+        msk.r_mask_brightstar_ghost,
+        msk.r_mask_brightstar_blooming,
+
+        msk.i_mask_brightstar_halo,
+        msk.i_mask_brightstar_ghost,
+        msk.i_mask_brightstar_blooming,
+
+        msk.z_mask_brightstar_halo,
+        msk.z_mask_brightstar_ghost,
+        msk.z_mask_brightstar_blooming,
+
+        msk.y_mask_brightstar_halo,
+        msk.y_mask_brightstar_ghost,
+        msk.y_mask_brightstar_blooming
 
 FROM
 	s23b_wide.forced as f1
 	LEFT JOIN s23b_wide.forced2 as f2 USING (object_id)
-	LEFT JOIN s23b_wide.forced4 as f4 USING (object_id)
-	LEFT JOIN s23b_wide.forced5 as f5 USING (object_id)
-	LEFT JOIN s23b_wide.forced6 as f6 USING (object_id)
-	LEFT JOIN s23b_wide.meas as m1 USING (object_id)
-	LEFT JOIN s23b_wide.meas2 as m2 USING (object_id)
-	LEFT JOIN s23b_wide.meas3 as m3 USING (object_id)
-        LEFT JOIN s23b_wide.masks as msk USING (object_id)
+    LEFT JOIN s23b_wide.masks as msk USING (object_id)
 
 
 WHERE
 f1.isprimary AND
-m1.tract  IN  ({$tract})                  AND
+f1.tract  IN  ({$tract})                  AND
 f1.i_cmodel_mag - f2.i_psfflux_mag > -0.08 AND
     
-f1.i_cmodel_mag - f1.a_i <22.0
+f1.i_cmodel_mag <22.0
+
+AND NOT f1.i_cmodel_flag
+AND NOT f1.g_cmodel_flag
+AND NOT f1.r_cmodel_flag
+AND NOT f1.z_cmodel_flag
+
+
+-- Full-depth full-color cut
+AND f1.g_inputcount_value >= 4
+AND f1.r_inputcount_value >= 4
+AND f1.i_inputcount_value >= 5
+AND f1.z_inputcount_value >= 5
 
  -- Not failed at finding the center
 AND NOT f2.g_sdsscentroid_flag
