@@ -165,14 +165,17 @@ def make_objective(test_X, test_Y, test_Fpix, val_X, val_Y, val_Fpix, loader):
 
     return objective
 
-def run_optuna_nn(config, property_df, keys, n_trials=200, top_k=5, run_name="test"):
+def run_optuna_nn(run_dir, property_df, keys, n_trials=200, top_k=5):
     """
     Function to train the neural network
     
     Parameter
     ------------------------------------------------------
-    property_df: pandas dataframe
-    imaging properties of each healpix. Must include all column in keys, 'target' and 'area'
+    run_dir: string
+    path of the directory to save the outputs
+    
+    Property:table
+    astropy table including imaging systematics and target density of each healpixels. Must include all column in keys, 'target' and 'area'
     
     keys: list
      The name of imaging attributes to be considered
@@ -203,10 +206,6 @@ def run_optuna_nn(config, property_df, keys, n_trials=200, top_k=5, run_name="te
     study = optuna.create_study(direction="minimize")
     study.optimize(objective, n_trials=n_trials)
 
-    save_dir = config['Imaging']['train_dir']
-    os.makedirs(save_dir, exist_ok=True)
-    
-    run_dir = os.path.join(SAVE_DIR, run_name)
     save_optuna_results(
         study,
         input_dim=data["input_dim"],
@@ -243,8 +242,7 @@ def prepare_nn_data(property_df, keys, nside=256, test_size=0.2):
     4. input_dim: number of input imaging attributes
     5. scaler: scaler to normalize the imaging attributes
     """
-    df_cleaned = property_df.dropna(subset=["target"])
-    properties = df_cleaned[keys]
+    properties = property_df[keys]
 
     scaler = StandardScaler()
     X_standardized = scaler.fit_transform(properties)
