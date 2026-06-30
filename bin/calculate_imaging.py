@@ -46,7 +46,7 @@ def main():
         file = os.path.join(out_dir,f'{field}_property.fits')
         im_property = Im.get_property_all(TractPatch, dustmap, config)
         
-        if im_property.empty:
+        if im_property is None:
             print(f"no tract in {field} field")
         else:
             table = Table.from_pandas(im_property)

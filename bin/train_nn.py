@@ -9,8 +9,8 @@ import os
 
 import yaml
 
-#keys = ['gseeing', 'rseeing', 'iseeing', 'zseeing', 'yseeing', 'star', 'g_depth', 'r_depth', 'i_depth', 'z_depth', 'y_depth', 'csfd_desi_extinction']
-keys = ['gseeing', 'rseeing', 'iseeing', 'zseeing', 'yseeing', 'g_depth', 'r_depth', 'i_depth', 'z_depth', 'y_depth', 'csfd_desi_extinction']
+keys = ['gseeing', 'rseeing', 'iseeing', 'zseeing', 'yseeing', 'star', 'g_depth', 'r_depth', 'i_depth', 'z_depth', 'y_depth', 'csfd_desi_extinction']
+#keys = ['gseeing', 'rseeing', 'iseeing', 'zseeing', 'yseeing', 'g_depth', 'r_depth', 'i_depth', 'z_depth', 'y_depth', 'csfd_desi_extinction']
 
 def parse_args():
     """
@@ -31,7 +31,7 @@ def parse_args():
                     help='specify the number of trials of optuna run')
     ap.add_argument('--save_n', '-n', default=5,
                     help='number of top trials to save')
-    ap.add_argument('--run_name', '-rn', default = "optuna"
+    ap.add_argument('--run_name', '-rn', default = "optuna",
                         help='specify the name of the output file')
     return ap.parse_args()
 
@@ -52,7 +52,7 @@ def main():
             data = hdu[1].data
             
         property_table = Table(data)
-        Tr.run_optuna_nn(out_dir, property_table, keys, n_trials=args.trial, top_k=args.save_n)
+        Tr.run_optuna_nn(out_dir, property_table, keys, n_trials=int(args.trial), top_k=int(args.save_n))
     else:
         print(f"file {property_file} does not exist")
     

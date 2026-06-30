@@ -1,6 +1,7 @@
 from pfsimaging import weights
 
 from astropy.table import Table, vstack, join
+import astropy.io.fits as fits
 
 import argparse
 
@@ -8,8 +9,8 @@ import os
 
 import yaml
 
-#keys = ['gseeing', 'rseeing', 'iseeing', 'zseeing', 'yseeing', 'star', 'g_depth', 'r_depth', 'i_depth', 'z_depth', 'y_depth', 'csfd_desi_extinction']
-keys = ['gseeing', 'rseeing', 'iseeing', 'zseeing', 'yseeing', 'g_depth', 'r_depth', 'i_depth', 'z_depth', 'y_depth', 'csfd_desi_extinction']
+keys = ['gseeing', 'rseeing', 'iseeing', 'zseeing', 'yseeing', 'star', 'g_depth', 'r_depth', 'i_depth', 'z_depth', 'y_depth', 'csfd_desi_extinction']
+#keys = ['gseeing', 'rseeing', 'iseeing', 'zseeing', 'yseeing', 'g_depth', 'r_depth', 'i_depth', 'z_depth', 'y_depth', 'csfd_desi_extinction']
 
 def parse_args():
     """
@@ -30,7 +31,7 @@ def parse_args():
     ap.add_argument('--method', '-m', nargs='+', default=['lin', 'quad', 'nn'],
                     choices=['lin', 'quad', 'nn'],
                     help='which method to calculate the imaging systematic weights')
-    ap.add_argument('--run_name', '-rn', default = "optuna"
+    ap.add_argument('--run_name', '-rn', default = "optuna",
                         help='specify the run name of the optuna')
     return ap.parse_args()
 
@@ -38,18 +39,19 @@ def method_weights(method, Property, args, config):
     if(method == 'lin'):
         table = weights.linear_weights(Property, keys)
         return table
-    else if(method == 'quad'):
+    elif(method == 'quad'):
         table = weights.quadratic_weights(Property, keys)
         return table
-    else if(method == 'nn'):
+    elif(method == 'nn'):
         best_model = os.path.join(config['out_dir']['optuna'], args.run_name, "best_model.pt")
         if os.path.exists(best_model):
-            table = nn_weights(Property, keys, best_model)
+            table = weights.nn_weights(Property, keys, best_model)
             return table
         else:
             print(f"file {best_model} does not exist")
             return None
-    else (f"method {method} not available"):
+    else: 
+        print(f"method {method} not available")
         return None
 
 def main():
@@ -75,13 +77,13 @@ def main():
         table_all = property_table
         
         for m in methods:
-            weight_table = method_weights(method, property_table, args, config)
+            weight_table = method_weights(m, property_table, args, config)
             if (weight_table is not None):
                 filename = os.path.join(out_dir, f"{m}_weights.fits")
                 weight_table.write(filename, format='fits', overwrite=True)
                 
-                _weight = Table({'healpix': weight_table,
-                                f'{m}_weight': weight_table['{m}_weight']})
+                _weight = Table({'healpix': weight_table['healpix'],
+                                f'{m}_weight': weight_table[f'{m}_weight']})
                 table_all = join(table_all, _weight, join_type='left', keys='healpix')
                 
         filename = os.path.join(out_dir, f"combined_weights.fits")

@@ -3,10 +3,19 @@ import numpy as np
 from sklearn.preprocessing import PolynomialFeatures
 from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
 
 from sklearn.metrics import mean_squared_error
 
 import torch
+
+import pandas as pd
+
+from astropy.table import Table
+
+import os
+
+from pfsimaging import train as train
 
 #Calculate systematic weights using
 #1. Linear Regression
@@ -16,6 +25,9 @@ import torch
 def prepare_data(df, keys):
     df_cleaned = df.dropna()
     properties = df_cleaned[keys]
+    if 'star' in keys:
+        properties = properties.copy()
+        properties.loc[:, 'star'] = np.log10(properties['star'])
     
     scaler = StandardScaler()
     df_standardized = pd.DataFrame(scaler.fit_transform(properties), columns= properties.columns)
@@ -26,7 +38,7 @@ def prepare_data(df, keys):
     X = np.concatenate([np.array(df_standardized[key]).reshape(-1, 1) for key in keys], axis=1)
 
     train_X, test_X, train_Y, test_Y = train_test_split(X, density)
-    return train_X, test_X, train_Y, test_Y
+    return train_X, test_X, train_Y, test_Y, X
     
 
 def linear_weights(Property, keys):
@@ -47,7 +59,7 @@ def linear_weights(Property, keys):
     """
     df = Property.to_pandas()
     df_cleaned = df.dropna()
-    train_X, test_X, train_Y, test_Y = prepare_data(df, keys)
+    train_X, test_X, train_Y, test_Y, X = prepare_data(df, keys)
 
     #learn using linear regression
     regr = LinearRegression()
@@ -91,7 +103,7 @@ def quadratic_weights(Property, keys):
     """
     df = Property.to_pandas()
     df_cleaned = df.dropna()
-    train_X, test_X, train_Y, test_Y = prepare_data(df, keys)
+    train_X, test_X, train_Y, test_Y, X = prepare_data(df, keys)
     
     # Transform features to polynomial (degree=2)
     poly = PolynomialFeatures(degree=2)
@@ -148,13 +160,16 @@ def nn_weights(Property, keys, best_model):
     else:
         print(f"{filename} does not exist")
         return None
-    model = build_model(**checkpoint["config"])
+    model = train.build_model(**checkpoint["config"])
     model.load_state_dict(checkpoint["state_dict"])
     model.eval()
     
     df = Property.to_pandas()
     df_cleaned = df.dropna(subset=['target'])
     properties = df_cleaned[keys]
+    if "star" in properties:
+        properties = properties.copy()
+        properties.loc[:, 'star'] = np.log10(properties['star'])
     scaler = StandardScaler()
     df_standardized = pd.DataFrame(scaler.fit_transform(properties), columns= properties.columns)
 

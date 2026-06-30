@@ -45,7 +45,7 @@ def get_property_all(tractpatch, dustmap, config):
     func = partial(get_property_tract, config = config)
     if len(tractlist)==0:
         print(f"No tracts in {tractpatch.field}")
-        return pd.DataFrame()
+        return None
     else:
         with Pool(processes=20) as pool:  # Adjust number of processes based on your CPU
             results = pool.map(func, tractlist)
@@ -61,7 +61,6 @@ def get_property_all(tractpatch, dustmap, config):
             properties = all_property.groupby('healpix').apply(lambda x: pd.Series(
                 {col: np.sum(x[col] * x['eff_area']) / np.sum(x['eff_area']) for col in all_columns} |  # Seeing, depth
                 {'area': np.sum(x['eff_area']) / np.sum(x['total']) * area}|
-                #{'star': np.log10(np.sum(x['star'])/(np.sum(x['eff_area'] / np.sum(x['total']) * area)))} |
                 {'total': np.sum(x['total'])})).reset_index()
             
             print(f'adding dust extinction for {dustmap}')
@@ -69,10 +68,13 @@ def get_property_all(tractpatch, dustmap, config):
             
             print('adding target density')
             properties = add_target_density(config, properties)
-            return property
+            
+            print('adding stellar density')
+            properties = add_stellar_density(config, tractpatch.field, properties)
+            return properties
         else:
             # return table if empty
-            return pd.DataFrame()
+            return None
     
     
 
@@ -131,9 +133,6 @@ def get_property_tract(tract,  config):
         return None
     properties = pd.merge(properties, patch_prop, on='healpix', how='left')
     
-    #############star file name
-    #print(f'adding stellar density on {tract}')
-    #properties = add_star_count(properties, tract,config)
     return properties
 
 def to_little_endian(arr):
@@ -261,7 +260,7 @@ def add_ext(properties, dust):
     return properties
     
 
-def add_star_count(properties, tract, config):
+def add_stellar_density(config, field, properties):
     """function to add stellar counts to pd properties
 
     Parameter
@@ -275,18 +274,15 @@ def add_star_count(properties, tract, config):
     with 'star' the total stellar count
     """
     
-    star = loader.Star(tract, config)
-    star.load_bsmask(config)
-    star.load_bgmask(config)
+    star = loader.Star(field, config)
     ra = star.ra
     dec = star.dec
-    mask = star.mask # true if "inside" bright star mask
         
     if ra is None:
-        print(f'No stars in tract {tract}')
+        print(f'No stars in {field} field')
         properties['star'] = np.zeros(len(properties['healpix']))
     else:
-        healpy = hp.ang2pix(nside=nside, theta=ra[~mask], phi=dec[~mask], lonlat=True)
+        healpy = hp.ang2pix(nside=nside, theta=ra, phi=dec, lonlat=True)
         
         _healpy, counts = np.unique(healpy, return_counts=True)
         data1 = {
@@ -295,7 +291,7 @@ def add_star_count(properties, tract, config):
         }
         table1 = pd.DataFrame(data1)
         properties = pd.merge(properties, table1, on='healpix', how='left')
-        properties['star'] = properties['star'].fillna(0)
+        properties['star'] = properties['star'].fillna(0)/area
     
     return properties
     
@@ -437,10 +433,15 @@ def clean_pixels(table, field):
     mask &= table['area'] > 0.0
     
     #remove healpix with nan
-    mask &= ~np.isnan(table.as_array().tolist()).any(axis=1)
+    mask = np.ones(len(table), dtype=bool)
+
+    for col in table.colnames:
+        if np.issubdtype(table[col].dtype, np.number):
+            mask &= ~np.isnan(table[col])
+
     
     #remove healpix with no star
-    mask &= mask['star'] > 0.0
+    mask &= table['star'] > 0.0
     
     return table[mask]
     

@@ -1,16 +1,20 @@
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 import pandas as pd
-from sklearn.metrics import r2_score
-from sklearn.metrics import mean_squared_error
 
 import torch
 from torch.utils.data import TensorDataset, DataLoader
 import torch.nn as nn
-import torch.nn.functional as F
+import copy
 import optuna
 
+import numpy as np
+
+import healpy as hp
+
 import os
+
+import json
 
 class CustomLoss(nn.Module):
     """
@@ -165,7 +169,7 @@ def make_objective(test_X, test_Y, test_Fpix, val_X, val_Y, val_Fpix, loader):
 
     return objective
 
-def run_optuna_nn(run_dir, property_df, keys, n_trials=200, top_k=5):
+def run_optuna_nn(run_dir, Property, keys, n_trials=200, top_k=5):
     """
     Function to train the neural network
     
@@ -191,7 +195,7 @@ def run_optuna_nn(run_dir, property_df, keys, n_trials=200, top_k=5):
     ------------------------------------------------------
     dictionary
     """
-    data = prepare_nn_data(property_df, keys)
+    data = prepare_nn_data(Property, keys)
     loader, val_data, test_data = make_tensors(data)
 
     val_X, val_Y, val_Fpix = val_data
@@ -215,7 +219,7 @@ def run_optuna_nn(run_dir, property_df, keys, n_trials=200, top_k=5):
 
     return study
 
-def prepare_nn_data(property_df, keys, nside=256, test_size=0.2):
+def prepare_nn_data(Property, keys, nside=256, test_size=0.2):
     """
     Function to prepare the train, validation and test datasets
     
@@ -242,16 +246,21 @@ def prepare_nn_data(property_df, keys, nside=256, test_size=0.2):
     4. input_dim: number of input imaging attributes
     5. scaler: scaler to normalize the imaging attributes
     """
-    properties = property_df[keys]
+    properties = Property[keys]
+    
+    if 'star' in keys:
+        properties['star'] = np.log10(properties['star'])
+    
+    df = properties.to_pandas()
 
     scaler = StandardScaler()
-    X_standardized = scaler.fit_transform(properties)
+    X_standardized = scaler.fit_transform(df)
 
-    mean = np.sum(df_cleaned["target"] * df_cleaned["area"]) / np.sum(df_cleaned["area"])
-    density = df_cleaned["target"] / mean
+    mean = np.sum(Property["target"] * Property["area"]) / np.sum(Property["area"])
+    density = Property["target"] / mean
 
     pix_area = hp.nside2pixarea(nside, degrees=True)
-    fpix = df_cleaned["area"] / pix_area
+    fpix = Property["area"] / pix_area
 
     X = X_standardized
 
@@ -272,6 +281,12 @@ def prepare_nn_data(property_df, keys, nside=256, test_size=0.2):
         "mean": mean,
     }
 
+def to_tensor_1d(x, dtype=torch.float):
+    return torch.from_numpy(np.asarray(x, dtype=float)).type(dtype).view(-1, 1)
+
+def to_tensor(x, dtype=torch.float):
+    return torch.from_numpy(np.asarray(x, dtype=float)).type(dtype)
+
 def make_tensors(data, batch_size=128):
     dtype = torch.float
 
@@ -279,17 +294,17 @@ def make_tensors(data, batch_size=128):
     val_X_np, val_Y_np, val_fpix_np = data["val"]
     test_X_np, test_Y_np, test_fpix_np = data["test"]
 
-    train_X = torch.from_numpy(train_X_np).type(dtype)
-    train_Y = torch.from_numpy(train_Y_np.values).type(dtype).view(-1, 1)
-    train_Fpix = torch.from_numpy(train_fpix_np.values).type(dtype)
+    train_X = to_tensor(train_X_np, dtype)
+    train_Y = to_tensor_1d(train_Y_np, dtype)
+    train_Fpix = to_tensor(train_fpix_np, dtype)
 
-    val_X = torch.from_numpy(val_X_np).type(dtype)
-    val_Y = torch.from_numpy(val_Y_np.values).type(dtype).view(-1, 1)
-    val_Fpix = torch.from_numpy(val_fpix_np.values).type(dtype)
+    val_X = to_tensor(val_X_np, dtype)
+    val_Y = to_tensor_1d(val_Y_np, dtype)
+    val_Fpix = to_tensor(val_fpix_np, dtype)
 
-    test_X = torch.from_numpy(test_X_np).type(dtype)
-    test_Y = torch.from_numpy(test_Y_np.values).type(dtype).view(-1, 1)
-    test_Fpix = torch.from_numpy(test_fpix_np.values).type(dtype)
+    test_X = to_tensor(test_X_np, dtype)
+    test_Y = to_tensor_1d(test_Y_np, dtype)
+    test_Fpix = to_tensor(test_fpix_np, dtype)
 
     loader = DataLoader(
         TensorDataset(train_X, train_Y, train_Fpix),

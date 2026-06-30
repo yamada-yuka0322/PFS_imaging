@@ -4,6 +4,7 @@ from astropy.io import fits
 
 from pfstarget import cuts as Cuts
 import os
+from glob import glob
 
 import re
 
@@ -39,7 +40,7 @@ class Target(object):
     """
     def __init__(self, config):
         self.ra, self.dec, self.tract, self.patch, self.objectID = load_targets(config)
-        self.mask = np.zeros(len(self.ra))
+        self.mask = np.zeros(len(self.ra), dtype=bool)
         
     def load_bsmask(self, config):
         bsmask_file = os.path.join(config["bsmask"]["target_bsmask"] , "s23b_ssp_co_targets_bsmask.fits")
@@ -54,13 +55,22 @@ class Target(object):
             # bright star mask
             bsmask = halo | ghost | blooming
 
-            self.mask = match_bsmask(self.objectID, ID, bsmask)
+            mask = match_bsmask(self.objectID, ID, bsmask) #true if inside mask
+            self.mask |= mask
             
         else:
             print(f"does not have {bsmask_file}. Run GenerateStarMask.py")
             
     def load_bgmask(self, config):
-        print('bgmask not implemented yet')
+        bgmask_file = os.path.join(config["bgmask"]["target_bgmask"] , "s23b_ssp_co_targets_bgmask.fits")
+        if os.path.exists(bgmask_file):
+            with fits.open(bgmask_file) as hdu:
+                data = hdu[1].data
+            targetId = data['object_id']
+            mask = ~np.isin(self.objectID, targetId) #true if inside bgmask
+            self.mask |= mask
+        else:
+            print(f"does not have {bgmask_file}.")
         
         
     def get_tract(self, tract):
@@ -108,54 +118,43 @@ class Star(object):
         Load stellar objects and corresponding bright-star mask
         for the specified tract. config is a dictionary of path read from the config.yaml file in the config directory
     """
-    def __init__(self, tract, config):
-        self.tract = tract
-        self.ra, self.dec, self.patch, self.objectID = load_stars(tract, config)
-        if(self.ra is None):
-            self.mask = None
-        else:
-            self.mask = np.zeros_like(self.ra, dtype=bool)
-        
-    def load_bsmask(self, config):
-        maskfile = os.path.join(config["bsmask"]["star_bsmask"], f"{self.tract}.fits")
-        if os.path.exists(maskfile):
-            with fits.open(maskfile) as hdu:
-                if len(hdu)==2:
-                    data = hdu[1].data
-                    bsmaskID = data['id']
-                    bsmask = data['halo'] | data['ghost'] | data['blooming'] #bright star mask. true if 'inside' mask
-                    self.mask |= match_bsmask(self.objectID, bsmaskID, bsmask)
-                else:
-                    print(f'{maskfile} does not have objects')
-        else:
-            print(f'cannot open {maskfile}')
-            
-    def load_bgmask(self, config):
-        print('bgmask not implemented yet')
+    def __init__(self, field, config):
+        self.ra, self.dec, self.objectID = load_stars(field, config)
         
         
-def load_stars(tract, config):
-    filename = os.path.join(config["data"]["star_dir"], f"{tract}.fits")
-    if os.path.exists(filename):
-        with fits.open(filename) as hdu:
-            if len(hdu)==2:
+def load_stars(field, config):
+    directory = os.path.join(config["Gaia"]["star"], field)
+    star_files = glob(os.path.join(directory, "*.fits"))
+    
+    ra = []
+    dec = []
+    objectId = []
+    
+    if len(star_files)==0:
+        print("Gaia stars not downloaded yet. Run bin/get_gaia_stars.py")
+        return None, None, None
+    
+    else:
+        for file in star_files:
+            with fits.open(file) as hdu:
                 data = hdu[1].data
-                ID =data['object_id']
-                g = data['g_input_count']
-                r = data['r_input_count']
-                i = data['i_input_count']
-                z = data['z_input_count']
-                    
-                mask = (g >= 4) & (r >= 4) & (i >= 5) & (z >= 5)
-                    
-                ra = data['ra'][mask]%360
-                dec = data['dec'][mask]
-                patch = data['patch'][mask]
-                objectID = data['object_id'][mask]
-                    
-                return ra, dec, patch, objectID
-            else:
-                print(f"no objects in {filename}")                   
+            _ra = data['ra']
+            _dec = data['dec']
+            _objectId = data['source_id']
+            
+            ra.append(_ra)
+            dec.append(_dec)
+            objectId.append(_objectId)
+            
+        ra = np.concatenate(ra)
+        dec = np.concatenate(dec)
+        objectId = np.concatenate(objectId)
+
+        # get only unique sources
+        _, idx = np.unique(objectId, return_index=True)
+        dx = np.sort(idx)
+
+        return ra[idx], dec[idx], objectId[idx]
             
 class Random(object):
     """Container for HSC randoms　in a single tract.
@@ -204,7 +203,15 @@ class Random(object):
             print(f'cannot open {maskfile}')
             
     def load_bgmask(self, config):
-        print('bgmask not implemented yet')
+        bgmask_file = os.path.join(config["bgmask"]["random_bgmask"] , f"{self.tract}_bgmask.fits")
+        if os.path.exists(bgmask_file):
+            with fits.open(bgmask_file) as hdu:
+                data = hdu[1].data
+            targetId = data['object_id']
+            mask = np.isin(self.objectID, targetId) #true if inside bgmask
+            self.mask |= mask
+        else:
+            print(f"does not have {bgmask_file}.")
         
 def load_random(tract, config):
     filename = os.path.join(config["data"]["random_dir"], f"{tract}.fits")
