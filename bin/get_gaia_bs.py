@@ -37,19 +37,22 @@ def main():
     else:
         parser.error("--config are required")
 
-    outdir = Path(config["Gaia"]["bs"]).expanduser()
-    outdir.mkdir(parents=True, exist_ok=True)
+    outdir = config["Gaia"]["bs"]
+    os.makedirs(outdir, exist_ok=True)
     
     tract_data = {}
 
     autumn = loader.TractPatch("autumn")
     spring = loader.TractPatch("spring")
+    hectomap = loader.TractPatch("hectomap")
 
     tract_data.update(autumn.data)
     tract_data.update(spring.data)
+    tract_data.update(hectomap.data)
 
     tract_list = autumn.get_tract()
     tract_list.extend(spring.get_tract())
+    tract_list.extend(hectomap.get_tract())
     
     func = partial(wrapper, tract_data = tract_data, outdir=outdir)
     
@@ -60,7 +63,7 @@ def wrapper(tract, tract_data, outdir):
     """
     wrapper function to pass the corner of each tracts to query_gaia_dr2_region function
     """
-    filename = outdir / f"{tract}_stars.fits"
+    filename = os.path.join(outdir , f"{tract}_stars.fits")
     if os.path.exists(filename):
         print(f"Stellar file in tract {tract} already exists")
     else:
@@ -107,7 +110,7 @@ def query_gaia_dr2_region(corner0, corner1, corner2, corner3, verbose=True):
     _ra = ra%360
     dec = corners[:, 1].copy()
 
-    ra_min, ra_max = ra.min(), ra.max() #360を跨がない
+    ra_min, ra_max = ra.min(), ra.max() #does not cross ra = 360 deg
     dec_min, dec_max = dec.min(), dec.max()
     crosses_zero = (_ra.max() - _ra.min()) > 180.0
 

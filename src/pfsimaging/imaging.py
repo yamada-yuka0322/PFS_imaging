@@ -431,10 +431,8 @@ def clean_pixels(table, field):
     
     #remove healpix with small effective area
     mask &= table['area'] > 0.0
-    
-    #remove healpix with nan
-    mask = np.ones(len(table), dtype=bool)
 
+    #remove healpix with nan
     for col in table.colnames:
         if np.issubdtype(table[col].dtype, np.number):
             mask &= ~np.isnan(table[col])

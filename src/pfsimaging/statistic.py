@@ -8,7 +8,7 @@ from matplotlib.colors import ListedColormap
 
 import pandas as pd
 
-from pfsimaging import Laoder as loader
+from pfsimaging import Loader as loader
 
 def mask_edge(autumn, spring):
     # Healpix pixel centers

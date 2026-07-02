@@ -65,7 +65,6 @@ def main():
     all_table.write(file, format='fits', overwrite=True)
     
     if (args.clean):
-        cleaned_file = os.path.join(out_dir,f'all_property_cleaned.fits')
         all_cleaned_table = vstack(cleaned_tables)
         cleaned_file = os.path.join(out_dir,f'all_property_cleaned.fits')
         all_cleaned_table.write(cleaned_file, format='fits', overwrite=True)
