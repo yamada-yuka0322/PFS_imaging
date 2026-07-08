@@ -7,12 +7,26 @@ git clone https://github.com/yamada-yuka0322/PFS_imaging.git
 cd PFS_imaging
 pip install -e . 
 ```
+
+
 ## getting started
 1. You first need to install pfstarget repository
 ```bash 
 git clone https://github.com/pfs-cosmo/pfstarget.git
 ```
-2. Make a config file under config/ directory to specify the
+
+2. Download  dust maps in `src/pfsimaging/dat`.
+
+On `idark`, you can or establish a symlinks to avoid downloading existing data
+```bash
+# csfd desi dust map
+ln -s /lustre/work/jingjing.shi/pfs_co_fa/data_raw/dustmaps/CSFD_DESI_merged_dust_map_NS2048_ring--Equatorial.fits src/pfsimaging/dat/CSFD_DESI_merged_dust_map_NS2048_ring--Equatorial.fits
+
+# csfd dust map 
+ln -s /lustre/work/jingjing.shi/pfs_co_fa/data_raw/dustmaps/CSFD_DESI_merged_dust_map_NS2048_ring.fits src/pfsimaging/dat/CSFD_DESI_merged_dust_map_NS2048_ring.fits
+```
+
+3. Make a config file under config/ directory to specify the
 ```bash 
 data:
   random_dir: ##Directory path for the downloaded HSC randoms (with the same mask as pfs co targets)
@@ -39,7 +53,7 @@ out_dir:
   
 tractlist: #path to the csv file with the entire tractId
 ```
-3. Download Gaia stars to apply updated bright stellar mask
+4. Download Gaia stars to apply updated bright stellar mask
 ```bash 
 python get_gaia_bs.py -c ../configs/my_config.yaml
 ```
@@ -50,13 +64,13 @@ python3 GenerateStarMask.py -c ../configs/my_config.yaml --kind galaxy
 python3 GenerateStarMask.py -c ../configs/my_config.yaml --kind random
 ```
 
-4. Download Gaia stars to estimate the stellar density
+5. Download Gaia stars to estimate the stellar density
 ```bash 
 python get_gaia_star.py -c ../configs/my_config.yaml
 ```
 The downloaded stellar catalog will be saved under config["Gaia"]["star"] directory.
 
-5. Download per-patch imaging attributes information using bin/hscReleaseQuery.py
+6. Download per-patch imaging attributes information using bin/hscReleaseQuery.py
    You will need a [STARS](https://stars2.naoj.hawaii.edu/) account for this.
 
 ```bash 

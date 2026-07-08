@@ -1,14 +1,17 @@
-import numpy as np
-from astropy.io import fits
-from astropy.table import Table, vstack, join
-import healpy as hp
 import os
-from multiprocessing import Pool
+import numpy as np
+import healpy as hp
+from astropy.io import fits
 import astropy.io.ascii as ascii
+from astropy.table import Table, vstack, join
+
+from multiprocessing import Pool
+
 from functools import partial
 import pandas as pd
 
 from pfsimaging import Loader as loader
+
 
 field = ['AEGIS', 'autumn', 'hectomap', 'spring']
 property_name = ['gseeing', 'rseeing', 'iseeing', 'zseeing', 'yseeing', 'g_depth', 'r_depth', 'i_depth', 'z_depth', 'y_depth']
@@ -17,37 +20,39 @@ nside = 256
 area = hp.nside2pixarea(nside,degrees=True)
 
 ##############################################################################################################
-def get_property_all(tractpatch, dustmap, config):
+def get_property_all(tractpatch, dustmap, config, nprocess=1, verbose=False):
     """function to get the properties of healpixels in a single field (AEGIS, autumn, hectomap or spring)
 
     Parameter
     ------------------------------------------
     tractpatch: instance
-    instance of tractpatch class. Includes the information about the tract and patch included in the field considered.
+        instance of tractpatch class. Includes the information about the tract and patch included in the field considered.
 
     tractlist: array
-    array of tract that would included in the output table
+        array of tract that would included in the output table
     
     dustmap: list
-    dust map names to be applied ["desi", "desi-csfd", "csfd"]
+        dust map names to be applied ["desi", "desi-csfd", "csfd"]
     
     config: dictionary
-    dictionary of path read from the config.yaml file in the config directory
+        dictionary of path read from the config.yaml file in the config directory
 
     output
     ------------------------------------------
-    t:table
-    table  of imaging properties for each healpixels in the field
+    t : table
+        table  of imaging properties for each healpixels in the field
     column: healpix, {g,r,i,z,y}seeing, {g,r,i,z,y}_depth, extinction, target, star, area, total
     """
     tractlist = tractpatch.get_tract()
     
-    func = partial(get_property_tract, config = config)
+    func = partial(get_property_tract, config=config, verbose=verbose)
+
     if len(tractlist)==0:
         print(f"No tracts in {tractpatch.field}")
         return None
     else:
-        with Pool(processes=20) as pool:  # Adjust number of processes based on your CPU
+        if verbose: print(f'multiprocessing using {nprocess} processes') 
+        with Pool(processes=nprocess) as pool:  
             results = pool.map(func, tractlist)
         
         # Exclude None results
@@ -56,20 +61,22 @@ def get_property_all(tractpatch, dustmap, config):
         if valid_results:
             all_property = pd.concat(valid_results, ignore_index=True)
 
-            #When healpixels are overlapping between different tracts, take the area weighted average between the effective overlapping area for all of the tracts 
+            # When healpixels are overlapping between different tracts
+            # take the area weighted average between the effective overlapping 
+            # area for all of the tracts 
             all_columns = property_name
             properties = all_property.groupby('healpix').apply(lambda x: pd.Series(
                 {col: np.sum(x[col] * x['eff_area']) / np.sum(x['eff_area']) for col in all_columns} |  # Seeing, depth
                 {'area': np.sum(x['eff_area']) / np.sum(x['total']) * area}|
                 {'total': np.sum(x['total'])})).reset_index()
             
-            print(f'adding dust extinction for {dustmap}')
+            if verbose: print(f'adding dust extinction for {dustmap}')
             properties = add_ext(properties, dustmap)
             
-            print('adding target density')
+            if verbose: print('adding target density')
             properties = add_target_density(config, properties)
             
-            print('adding stellar density')
+            if verbose: print('adding stellar density')
             properties = add_stellar_density(config, tractpatch.field, properties)
             return properties
         else:
@@ -78,24 +85,24 @@ def get_property_all(tractpatch, dustmap, config):
     
     
 
-def get_property_tract(tract,  config):
+def get_property_tract(tract, config=None, verbose=False):
     """function to get the property of the healpix within a single tract
 
     Parameters
     -------------------------------------------------
     tract:int
-    ID of tract considered
+        ID of tract considered
     
     config: dictionary
-    dictionary of path read from the config.yaml file in the config directory
+        dictionary of path read from the config.yaml file in the config directory
 
     Output
     ------------------------------------------------
     properties:dataframe
-    dataframe of imaging properties for each healpixels in the tract
-    includes seeing, depth, stellar density, target density and extinction
+        dataframe of imaging properties for each healpixels in the tract
+        includes seeing, depth, stellar density, target density and extinction
     """
-    print(f'start tract {tract}')
+    if verbose: print(f'getting properties from tract {tract}')
     
     all_ra, all_dec, all_patch, all_ID = loader.load_random_all(tract, config)
     #healpix of the all randoms
@@ -135,11 +142,13 @@ def get_property_tract(tract,  config):
     
     return properties
 
+
 def to_little_endian(arr):
     dt = arr.dtype
     if dt.byteorder == '>':  # ONLY big endian
         return arr.byteswap().view(dt.newbyteorder('='))
     return arr
+
 
 def band_property(tract, config, df):
     """
@@ -182,29 +191,24 @@ def band_property(tract, config, df):
 
     patch_prop = patch_prop.groupby('healpix')[property_name].mean().reset_index()
     return patch_prop
+   
+
+def add_ext(properties, dust='csfd_desi'):
+    """ function to read in the dust map file and get E(B-V) for each healpixel
     
-def add_ext(properties, dust):
-    """
-    function to read in the dust map file and get E(B-V) for each healpixel
     Parameter
     ------------------------------------------
     tract: int
-    ID of tract considered
+        ID of tract considered
 
     patches: instance
-    instance of load.patch class. Includes the {g,r,i,z,y}-depth and {g,r,i,z,y}-seeing defined for each patch
+        instance of load.patch class. Includes the {g,r,i,z,y}-depth and {g,r,i,z,y}-seeing defined for each patch
     
-    df: PdDataframe
-    dataframe including the randoms in the concidered tract
-    column: 'healpix', 'mask', 'patch'
-    healpix: which healpix the random is included in
-    mask: true if outside mask
-    patch: which patch the random is included in
 
     output
     ------------------------------------------
     properties: PdDataframe
-    dataframe  of imaging properties for each healpix ()
+        dataframe  of imaging properties for each healpix ()
     
     """
     #desi dust map
@@ -224,24 +228,24 @@ def add_ext(properties, dust):
     
     #desi csfd matched dust map
     elif dust=='csfd_desi':
-        filename = "/lustre/work/jingjing.shi/pfs_co_fa/data_raw/dustmaps/CSFD_DESI_merged_dust_map_NS2048_ring--Equatorial.fits"
-        hdul = fits.open(filename)
-        data = hdul[1].data
-        df_csfd_desi = data['EBV_CSFD_DESI_merged_at_1deg']
-        hdul.close()
+        filename = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'dat', 
+                "CSFD_DESI_merged_dust_map_NS2048_ring--Equatorial.fits")
+        with fits.open(filename) as hdul: 
+            data = hdul[1].data
+            df_csfd_desi = data['EBV_CSFD_DESI_merged_at_1deg']
     
         _nside = hp.get_nside(df_csfd_desi)
 
         ebv = hp.ud_grade(df_csfd_desi, nside)
         properties['csfd_desi_extinction'] = ebv[properties['healpix']]
-        hdul.close()
         
     #csfd dust map
     elif dust=='csfd':
-        filename = "/lustre/work/jingjing.shi/pfs_co_fa/data_raw/dustmaps/CSFD_DESI_merged_dust_map_NS2048_ring.fits"
-        hdul = fits.open(filename)
-        df_csfd_desi = hdul[1].data
-    
+        filename = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'dat', 
+                "CSFD_DESI_merged_dust_map_NS2048_ring.fits")
+        with fits.open(filename) as hdul :
+            df_csfd_desi = hdul[1].data
+        
         _nside = hp.get_nside(df_csfd_desi['EBV_CSFD'])
         ind_galactic = np.arange(hp.get_map_size(df_csfd_desi['EBV_CSFD']))
         theta_galactic, phi_galactic = hp.pix2ang(_nside, ind_galactic)
@@ -252,8 +256,6 @@ def add_ext(properties, dust):
         ebv_map = df_csfd_desi['EBV_CSFD'][ind_equatorial]
         ebv = hp.ud_grade(ebv_map, nside)
         properties['csfd_extinction'] = ebv[properties['healpix']]
-        hdul.close()
-        
     else:
         print(f'No dust file corresponding to {dust}')
     
