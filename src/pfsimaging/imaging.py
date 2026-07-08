@@ -193,7 +193,7 @@ def band_property(tract, config, df):
     return patch_prop
    
 
-def add_ext(properties, dust='csfd_desi'):
+def add_ext(properties, dust='csfd_desi', verbose=False):
     """ function to read in the dust map file and get E(B-V) for each healpixel
     
     Parameter
@@ -229,14 +229,8 @@ def add_ext(properties, dust='csfd_desi'):
     #desi csfd matched dust map
     elif dust=='csfd_desi':
         filename = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'dat', 
-                "CSFD_DESI_merged_dust_map_NS2048_ring--Equatorial.fits")
-        with fits.open(filename) as hdul: 
-            data = hdul[1].data
-            df_csfd_desi = data['EBV_CSFD_DESI_merged_at_1deg']
-    
-        _nside = hp.get_nside(df_csfd_desi)
-
-        ebv = hp.ud_grade(df_csfd_desi, nside)
+                "CSFD_DESI_merged_dust_map_NS2048_ring--Equatorial_nside256.npy")
+        ebv = np.load(filename) 
         properties['csfd_desi_extinction'] = ebv[properties['healpix']]
         
     #csfd dust map
