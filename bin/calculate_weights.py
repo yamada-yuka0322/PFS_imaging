@@ -28,11 +28,17 @@ def parse_args():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--config', required=True,
                     help='path to the config file which specify necessary path')
+    ap.add_argument('--imaging-dir', required=True, 
+            help='directory path where the imaging properties are stored')
+    ap.add_argument('--out-dir', required=True, 
+            help='output path')
     ap.add_argument('--method', '-m', nargs='+', default=['lin', 'quad', 'nn'],
                     choices=['lin', 'quad', 'nn'],
                     help='which method to calculate the imaging systematic weights')
     ap.add_argument('--run_name', '-rn', default = "optuna",
                         help='specify the run name of the optuna')
+    ap.add_argument('--combine', action='store_true',
+                        help='output combined file')
     return ap.parse_args()
 
 def method_weights(method, Property, args, config):
@@ -64,10 +70,10 @@ def main():
     
     methods = args.method
     
-    out_dir = os.path.join(config['out_dir']['weights'], args.run_name)
+    out_dir = os.path.join(args.out_dir, args.run_name)
     os.makedirs(out_dir, exist_ok=True)
     
-    property_file = os.path.join(config['out_dir']['imaging'], "all_property_cleaned.fits")
+    property_file = os.path.join(args.imaging_dir, "all_property_cleaned.fits")
 
     if os.path.exists(property_file):
         with fits.open(property_file) as hdu:
@@ -81,13 +87,14 @@ def main():
             if (weight_table is not None):
                 filename = os.path.join(out_dir, f"{m}_weights.fits")
                 weight_table.write(filename, format='fits', overwrite=True)
+                print(f"saved {filename}")
                 
                 _weight = Table({'healpix': weight_table['healpix'],
                                 f'{m}_weight': weight_table[f'{m}_weight']})
                 table_all = join(table_all, _weight, join_type='left', keys='healpix')
-                
-        filename = os.path.join(out_dir, f"combined_weights.fits")
-        table_all.write(filename, format='fits', overwrite=True)
+        if(args.combine):  
+            filename = os.path.join(out_dir, f"combined_weights.fits")
+            table_all.write(filename, format='fits', overwrite=True)
     else:
         print(f"file {property_file} does not exist")
     

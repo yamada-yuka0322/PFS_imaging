@@ -52,14 +52,13 @@ def main():
         if im_property is None:
             print(f"no tract in {field} field")
         else:
-            table = Table.from_pandas(im_property)
-            table.write(os.path.join(args.out_dir, f'{field}_property.fits'), 
+            im_property.write(os.path.join(args.out_dir, f'{field}_property.fits'), 
                     format='fits', overwrite=True)
             
-            tables.append(table)
+            tables.append(im_property)
             
             if (args.clean):
-                cleaned_table = Im.clean_pixels(table, field)
+                cleaned_table = Im.clean_pixels(im_property, field, verbose=args.verbose)
                 cleaned_table.write(os.path.join(args.out_dir,f'{field}_property_cleaned.fits'), 
                         format='fits', overwrite=True)
                 cleaned_tables.append(cleaned_table)

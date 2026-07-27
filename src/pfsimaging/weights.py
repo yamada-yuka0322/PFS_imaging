@@ -23,22 +23,26 @@ from pfsimaging import train as train
 #3. Neural Network (from optuna best model)
 
 def prepare_data(df, keys):
-    df_cleaned = df.dropna()
+    df_cleaned = df[df['target']>0.0]
     properties = df_cleaned[keys]
     if 'star' in keys:
         properties = properties.copy()
         properties.loc[:, 'star'] = np.log10(properties['star'])
+        
+    if 'csfd_desi_extinction' in keys:
+        properties = properties.copy()
+        properties.loc[:, 'csfd_desi_extinction'] = np.log10(properties['csfd_desi_extinction'])
     
     scaler = StandardScaler()
     df_standardized = pd.DataFrame(scaler.fit_transform(properties), columns= properties.columns)
     
     mean = np.sum(df_cleaned["target"]*df_cleaned["area"])/np.sum(df_cleaned["area"])
-    density = df_cleaned["target"]/mean
+    density = np.log10(df_cleaned["target"]/mean)
 
     X = np.concatenate([np.array(df_standardized[key]).reshape(-1, 1) for key in keys], axis=1)
 
     train_X, test_X, train_Y, test_Y = train_test_split(X, density)
-    return train_X, test_X, train_Y, test_Y, X
+    return train_X, test_X, train_Y, test_Y, X, df_cleaned.index
     
 
 def linear_weights(Property, keys):
@@ -59,7 +63,7 @@ def linear_weights(Property, keys):
     """
     df = Property.to_pandas()
     df_cleaned = df.dropna()
-    train_X, test_X, train_Y, test_Y, X = prepare_data(df, keys)
+    train_X, test_X, train_Y, test_Y, X, idx = prepare_data(df, keys)
 
     #learn using linear regression
     regr = LinearRegression()
@@ -77,12 +81,15 @@ def linear_weights(Property, keys):
     # MSE for test data
     mse_test = mean_squared_error(test_Y, predicted_density)
     print("Test MSE linear:", mse_test)
+    
+    log_density = regr.predict(X)
+    _weight = 1/10**log_density
 
-    _density = regr.predict(X)
-    _weight = 1/_density
+    df_out = df.copy()
+    df_out['lin_weight'] = 0.0
+    df_out.loc[idx, 'lin_weight'] = _weight
 
-    df_cleaned['lin_weight'] = _weight
-    table = Table.from_pandas(df_cleaned)
+    table = Table.from_pandas(df_out)
     return table
 
 def quadratic_weights(Property, keys):
@@ -103,7 +110,7 @@ def quadratic_weights(Property, keys):
     """
     df = Property.to_pandas()
     df_cleaned = df.dropna()
-    train_X, test_X, train_Y, test_Y, X = prepare_data(df, keys)
+    train_X, test_X, train_Y, test_Y, X, idx = prepare_data(df, keys)
     
     # Transform features to polynomial (degree=2)
     poly = PolynomialFeatures(degree=2)
@@ -128,12 +135,16 @@ def quadratic_weights(Property, keys):
     print("Training MSE quadratic:", mse_train)
     print("Test MSE quadratic:", mse_test)
 
-    _density = regr.predict(X_poly)
-    _weight = 1/_density
-    
-    df_cleaned['quad_weight'] = _weight
-    table = Table.from_pandas(df_cleaned)
+    log_density = regr.predict(X_poly)
+    _weight = 1/10**log_density
+
+    df_out = df.copy()
+    df_out['quad_weight'] = 0.0
+    df_out.loc[idx, 'quad_weight'] = _weight
+
+    table = Table.from_pandas(df_out)
     return table
+
 
 
 def nn_weights(Property, keys, best_model):
@@ -167,9 +178,14 @@ def nn_weights(Property, keys, best_model):
     df = Property.to_pandas()
     df_cleaned = df.dropna(subset=['target'])
     properties = df_cleaned[keys]
+    
     if "star" in properties:
         properties = properties.copy()
         properties.loc[:, 'star'] = np.log10(properties['star'])
+    if 'csfd_desi_extinction' in properties:
+        properties = properties.copy()
+        properties.loc[:, 'csfd_desi_extinction'] = np.log10(properties['csfd_desi_extinction'])
+        
     scaler = StandardScaler()
     df_standardized = pd.DataFrame(scaler.fit_transform(properties), columns= properties.columns)
 
@@ -180,8 +196,8 @@ def nn_weights(Property, keys, best_model):
         pred = model(X_tensor).squeeze().detach().cpu().numpy()
 
     #density = np.clip(pred, 1e-6, None)
-    density = pred
-    _weight = np.where(density <= 0, np.nan, 1.0 / density)
+    log_density = pred
+    _weight = 10**(-log_density)
     
     df_cleaned['nn_weight'] = _weight
     table = Table.from_pandas(df_cleaned)

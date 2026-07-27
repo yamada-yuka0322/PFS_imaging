@@ -33,14 +33,14 @@ class CustomLoss(nn.Module):
         3. fpix: completeness of each pixel
     
     """
-    def __init__(self, model):
+    def __init__(self):
         super().__init__()
-        self.model = model
 
     def forward(self, output, target, fpix):
-        weighted_mse = torch.mean(fpix * (output - target) ** 2)
-
-        return weighted_mse
+        
+        squared_error = (output - target) ** 2
+        
+        return torch.sum(fpix * squared_error) / torch.sum(fpix)
     
 
 def build_model(input_dim, width, depth):
@@ -115,12 +115,12 @@ def make_objective(test_X, test_Y, test_Fpix, val_X, val_Y, val_Fpix, loader):
             Minimum validation loss achieved during training.
         """
         # suggest hiperparameters
-        lr = trial.suggest_float("lr", 1e-6, 1e-3, log=True)
-        depth = trial.suggest_int("depth", 2, 6)
-        width = trial.suggest_categorical("width", [64, 128, 256, 512, 1024])
+        lr = trial.suggest_float("lr", 1e-5, 1e-3, log=True)
+        depth = trial.suggest_int("depth", 2, 4)
+        width = trial.suggest_categorical("width", [16, 32, 64, 128])
 
         model = build_model(12, width, depth)
-        loss_fn = CustomLoss(model)
+        loss_fn = CustomLoss()
         optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
         best_val_loss = float("inf")
@@ -246,31 +246,65 @@ def prepare_nn_data(Property, keys, nside=256, test_size=0.2):
     4. input_dim: number of input imaging attributes
     5. scaler: scaler to normalize the imaging attributes
     """
-    properties = Property[keys]
+    cleaned = Property[Property['target']>0.0]
+
+    properties = cleaned[keys]
     
     if 'star' in keys:
         properties['star'] = np.log10(properties['star'])
+        
+    if 'csfd_desi_extinction' in keys:
+        properties['csfd_desi_extinction'] = np.log10(properties['csfd_desi_extinction'])
     
     df = properties.to_pandas()
 
-    scaler = StandardScaler()
-    X_standardized = scaler.fit_transform(df)
+    #scaler = StandardScaler()
+    #X_standardized = scaler.fit_transform(df)
 
-    mean = np.sum(Property["target"] * Property["area"]) / np.sum(Property["area"])
-    density = Property["target"] / mean
+    mean = np.sum(cleaned["target"] * cleaned["area"]) / np.sum(cleaned["area"])
+    density = np.log10(cleaned["target"] / mean)
 
     pix_area = hp.nside2pixarea(nside, degrees=True)
-    fpix = Property["area"] / pix_area
+    fpix = cleaned["area"] / pix_area
 
-    X = X_standardized
+    X = df.to_numpy(dtype=np.float64)
+    density = np.asarray(density, dtype=np.float64)
+    fpix = np.asarray(fpix, dtype=np.float64)
 
-    train_X_np, temp_X_np, train_Y_np, temp_Y_np, train_fpix_np, temp_fpix_np = train_test_split(
-        X, density, fpix, test_size=test_size
+    (
+        train_X_np,
+        temp_X_np,
+        train_Y_np,
+        temp_Y_np,
+        train_fpix_np,
+        temp_fpix_np,
+    ) = train_test_split(
+        X,
+        density,
+        fpix,
+        test_size=test_size,
+        random_state=42,
     )
 
-    val_X_np, test_X_np, val_Y_np, test_Y_np, val_fpix_np, test_fpix_np = train_test_split(
-        temp_X_np, temp_Y_np, temp_fpix_np, test_size=0.5
+    (
+        val_X_np,
+        test_X_np,
+        val_Y_np,
+        test_Y_np,
+        val_fpix_np,
+        test_fpix_np,
+    ) = train_test_split(
+        temp_X_np,
+        temp_Y_np,
+        temp_fpix_np,
+        test_size=0.5,
+        random_state=42,
     )
+
+    scaler = StandardScaler()
+    train_X_np = scaler.fit_transform(train_X_np)
+    val_X_np = scaler.transform(val_X_np)
+    test_X_np = scaler.transform(test_X_np)
 
     return {
         "train": (train_X_np, train_Y_np, train_fpix_np),
@@ -296,15 +330,15 @@ def make_tensors(data, batch_size=128):
 
     train_X = to_tensor(train_X_np, dtype)
     train_Y = to_tensor_1d(train_Y_np, dtype)
-    train_Fpix = to_tensor(train_fpix_np, dtype)
+    train_Fpix = to_tensor_1d(train_fpix_np, dtype)
 
     val_X = to_tensor(val_X_np, dtype)
     val_Y = to_tensor_1d(val_Y_np, dtype)
-    val_Fpix = to_tensor(val_fpix_np, dtype)
+    val_Fpix = to_tensor_1d(val_fpix_np, dtype)
 
     test_X = to_tensor(test_X_np, dtype)
     test_Y = to_tensor_1d(test_Y_np, dtype)
-    test_Fpix = to_tensor(test_fpix_np, dtype)
+    test_Fpix = to_tensor_1d(test_fpix_np, dtype)
 
     loader = DataLoader(
         TensorDataset(train_X, train_Y, train_Fpix),

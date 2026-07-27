@@ -10,6 +10,13 @@ import pandas as pd
 
 from pfsimaging import Loader as loader
 
+from astropy.table import Table
+
+import pymaster as nmt
+
+nside = 256
+area = hp.nside2pixarea(nside,degrees=True)
+
 def mask_edge(autumn, spring):
     # Healpix pixel centers
     nside = 256
@@ -148,14 +155,13 @@ def mean_density(table):
     mu: float
     effective area weighted mean density
     """
-    x = table.to_pandas()
-    m = x['target'].notna() & np.isfinite(x['target']) & x['area'].notna() & np.isfinite(x['area'])
+    m = ~np.isnan(table['target']) & np.isfinite(table['target']) & ~np.isnan(table['area']) & np.isfinite(table['area'])
     if not np.any(m):
         return 0
-    area_sum = np.sum(x.loc[m, 'area'])
+    area_sum = np.sum(table['area'][m])
     if area_sum == 0:
         return 0
-    mu = np.sum(x.loc[m, 'target'] * x.loc[m, 'area']) / area_sum
+    mu = np.sum(table['target'][m] * table['area'][m]) / area_sum
     return mu
     
 
@@ -244,7 +250,7 @@ def jackknife(table, figure=False):
 
 def jackknife_ang_ratio(
     table, key, target_col, bin_edges_deg, 
-    nside=256, eps=1e-15
+    nside=256, eps=1e-15, ratio = True
 ):
     """
     Estimator: ( <w_sg>^2 ) / <w_ss>,  where
@@ -278,28 +284,27 @@ def jackknife_ang_ratio(
         Jackknife standard deviation per bin (leave-one-out regions).
     """
 
-    mean_density = mean_density(table)
+    _mean_density = mean_density(table)
     table = jackknife(table) #apply jacknife ID
-    df = table.to_pandas()
 
     # ---- 1) Prepare deltas ----
     # delta_i: target density contrast (w.r.t provided mean_density)
-    delta_i = df[target_col].to_numpy() / float(mean_density) - 1.0
+    delta_i = np.array(table[target_col]) / float(_mean_density) - 1.0
 
     # delta_s: systematics contrast relative to area-weighted global mean
-    glob_mean_key = np.average(df[key].to_numpy(), weights=df['area'].to_numpy())
-    delta_s = df[key].to_numpy() / glob_mean_key - 1.0
+    glob_mean_key = np.average(np.array(table[key]), weights=np.array(table['area']))
+    delta_s = np.array(table[key]) / glob_mean_key - 1.0
     
     #random
-    delta_r = np.random.normal(loc = np.mean(delta_i), scale = np.std(delta_i), size = len(df['healpix']))
+    delta_r = np.random.normal(loc = np.mean(delta_i), scale = np.std(delta_i), size = len(table['healpix']))
 
-    hpix = df['healpix'].to_numpy()
-    area = df['area'].to_numpy()
-    jk_label = df['jackknife'].to_numpy()
+    hpix = np.array(table['healpix'])
+    area = np.array(table['area'])
+    jk_label = np.array(table['jackknife'])
 
     # ---- 2) Geometry ----
     # Get angular vectors of pixel centers
-    theta, phi = hp.pix2ang(nside, hpix, nest=nest)
+    theta, phi = hp.pix2ang(nside, hpix, nest=False)
     vecs = hp.ang2vec(theta, phi)
 
     # Binning prep
@@ -319,7 +324,7 @@ def jackknife_ang_ratio(
     pair_j = []      # j index
 
     for i, p in enumerate(hpix):
-        neigh = hp.query_disc(nside, vecs[i], radius_rad, inclusive=False, nest=nest)
+        neigh = hp.query_disc(nside, vecs[i], radius_rad, inclusive=False, nest=False)
         # Keep only neighbors present in our catalog and with j>i (unique pair)
         valid_js = []
         for pj in neigh:
@@ -372,27 +377,33 @@ def jackknife_ang_ratio(
         wsg_pair = 0.5 * (delta_s[ii] * delta_i[jj] + delta_s[jj] * delta_i[ii])
         # w_ss for each pair
         wss_pair = delta_s[ii] * delta_s[jj]
+        wgg_pair = delta_i[ii] * delta_i[jj]
 
         # Weighted sums per bin
         sum_w = np.bincount(bb, minlength=nbins)
         sum_wsg = np.bincount(bb, weights=wsg_pair, minlength=nbins)
+        sum_wgg = np.bincount(bb, weights=wgg_pair, minlength=nbins)
         sum_wss = np.bincount(bb, weights=wss_pair, minlength=nbins)
 
         # Averages
         with np.errstate(invalid='ignore', divide='ignore'):
             avg_wsg = sum_wsg / (sum_w)
             avg_wss = sum_wss / (sum_w)
+            avg_wgg = sum_wgg / (sum_w)
 
         # Estimator per bin: (<w_sg>^2)/<w_ss>
-        #est = (avg_wsg ** 2) / (avg_wss)
-        est = avg_wsg
+        if ratio:
+            est = (avg_wsg ** 2) / (avg_wss)
+            
+        else:
+            est = avg_wsg
 
         # (任意) 物理的に不安定な領域の警告は呼び出し側で行うとよい
-        return est
+        return est, avg_wgg
 
     # ---- 5) Full-sample estimate ----
     full_mask = np.ones_like(pair_bins, dtype=bool)
-    est_full = accumulate_and_estimate(full_mask)
+    est_full, _ = accumulate_and_estimate(full_mask)
 
     # ---- 6) Jackknife (leave-one-region-out) ----
     unique_jk = np.unique(jk_label)
@@ -404,7 +415,7 @@ def jackknife_ang_ratio(
     for lab in unique_jk:
         # keep pairs where BOTH endpoints are NOT the excluded label
         keep = (idx2jk[pair_i] != lab) & (idx2jk[pair_j] != lab)
-        est_j = accumulate_and_estimate(keep)
+        _, est_j = accumulate_and_estimate(keep) ##stacking "w_gg" to calculate sigma(w_gg)
         jk_vals.append(est_j)
 
     jk_vals = np.vstack(jk_vals)  # shape: (n_jack, nbins)
@@ -418,140 +429,540 @@ def jackknife_ang_ratio(
     return bin_centers, est_full, jk_std
 
 ########################################################################
-def jackknife_dens(table, key, target_col = 'target', n_jack=20, bins=10, min_count=50):
+def jackknife_dens(
+        table,
+        key,
+        target_col='target',
+        n_jack=20,
+        bins=10,
+        min_count=100,
+):
     """
+    calculate target density as a function of imaging attribute. (with jackknife error bar)
+
     Parameters
-    ------------------------------------------------------------------------------------
-    table: astropy table
-    table including all imaging attributes specified in key, the target density and the effective area
-    
-    key: string
-    name of the imaging attribute
-    
-    target_col: string
-    name of the target density column 
-    (either 'target' for the observed target or 'weighted_target' for the weighted target density)
-    
-    n_jack:int
-    number of jacknife region
-    
-    bins: int
-    number of bins for the imaging attributes
-    
-    min_count: minimum number of data that must be included for a single bin
-    
-    output
-    -------------------------------------------------------------------------
-    bin_center: numpy array
-    center of the applied bins
-    
-    mean: numpy array
-    mean target density for each bin
-    
-    std: numpy array
-    jacknife error bar for each bin
+    ----------
+    table : astropy.table.Table
+        table including Imaging attribute、target density、effective area。
+
+    key : str
+        imaging attribute name。
+
+    target_col : str, default='target'
+        Target density column name。
+        ex: 'target', 'weighted_target'
+
+    n_jack : int, default=20
+        Jackknife region count。
+
+    bins : int or array-like, default=10
+        Bin count or bin edge。
+
+    min_count : int, default=100
+        minimum datapoint within single bin。
+
+    Returns
+    -------
+    bin_centers : numpy.ndarray
+        center of each bin
+
+    mean : numpy.ndarray
+        target density fluctuation
+        n / mean_density - 1。
+
+    std : numpy.ndarray
+        jackkinfe error
     """
-    table['jackknife_block'] = np.random.randint(0, n_jack, size=len(table))
-    mean_density = mean_density(table)
-    df = table.to_pandas()
+    #rng = np.random.default_rng()
+    #table['jackknife'] = rng.integers(n_jack, size=len(table))
+    table = jackknife(table)
 
-    # bin data into 10 groups for each imaging attributes
-    _, fixed_bins = np.histogram(df[key], bins=bins)
-    bin_centers = (fixed_bins[:-1] + fixed_bins[1:]) / 2.0
-    df[f'{key}_bin'] = pd.cut(df[key], bins=fixed_bins)
+    required_cols = {key, target_col, 'area', 'jackknife'}
+    missing_cols = required_cols - set(table.colnames)
 
-    def weighted_mean_rel(x):
-        # calculate the weighted mean for a single imaging attribute bin
-        m = x['target'].notna() & np.isfinite(x[target_col]) & x['area'].notna() & np.isfinite(x['area'])
-        if not np.any(m):
-            return pd.Series({'count': 0, 'mean': np.nan})
-        area_sum = np.sum(x.loc[m, 'area'])
-        if area_sum == 0:
-            return pd.Series({'count': int(m.sum()), 'mean': np.nan})
-        mu = np.sum(x.loc[m, target_col] * x.loc[m, 'area']) / area_sum
-        return pd.Series({'count': int(m.sum()), 'mean': mu / mean_density - 1.0})
+    if missing_cols:
+        raise KeyError(
+            f"Required columns are missing: {sorted(missing_cols)}"
+        )
 
-    # calculate the mean for all bins
-    summary = df.groupby(f'{key}_bin').apply(weighted_mean_rel).reset_index()
+    mean_dens = mean_density(table)
 
-    # calculate error bars using jacknife
-    means_all = []
-    for i in jacks:
-        jack_df = df[df['jackknife_block'] != i].copy()
-        jack_df[f'{key}_bin'] = pd.cut(jack_df[key], bins=fixed_bins)
-        _summary = jack_df.groupby(f'{key}_bin').apply(lambda x: weighted_mean_rel(x)[['mean']]).reset_index()
-        means_all.append(_summary['mean'].values)
+    key_values = np.asarray(table[key], dtype=float)
+    target_values = np.asarray(table[target_col], dtype=float)
+    area_values = np.asarray(table['area'], dtype=float)
+    jack_ids = np.asarray(table['jackknife'])
 
-    means_all = np.array(means_all)  # shape: (n_jack, n_bins)
-    theta_bar = np.nanmean(means_all, axis=0)  # the mean of all jacks
 
-    jk_var = (n_jack - 1) / n_jack * np.nanmean((means_all - theta_bar[None, :])**2, axis=0)
-    jk_std = np.sqrt(jk_var)# jacknife error
+    valid = (
+        np.isfinite(key_values)
+        & np.isfinite(target_values)
+        & np.isfinite(area_values)
+        & (area_values > 0)
+    )
 
-    # remove bins with data points smaller than min_count
-    mask = summary['count'] >= min_count
+    if not np.any(valid):
+        raise ValueError("No valid data points were found.")
 
-    return bin_centers[mask.values], summary.loc[mask, 'mean'].values, jk_std[mask.values]
+    # Bin edge
+    if np.isscalar(bins):
+        _, fixed_bins = np.histogram(
+            key_values[valid],
+            bins=int(bins),
+        )
+    else:
+        fixed_bins = np.asarray(bins, dtype=float)
+
+    n_bins = len(fixed_bins) - 1
+
+    if n_bins < 1:
+        raise ValueError("At least one bin is required.")
+
+    bin_centers = 0.5 * (fixed_bins[:-1] + fixed_bins[1:])
+
+    bin_ids = np.digitize(
+        key_values,
+        fixed_bins,
+        right=False,
+    ) - 1
+
+    bin_ids[key_values == fixed_bins[-1]] = n_bins - 1
+
+    valid &= (bin_ids >= 0) & (bin_ids < n_bins)
+
+    def calculate_binned_mean(selection):
+        """
+        calculate mean density for each attribute bin
+        """
+        counts = np.zeros(n_bins, dtype=int)
+        means = np.full(n_bins, np.nan, dtype=float)
+
+        for bin_index in range(n_bins):
+            m = (
+                selection
+                & valid
+                & (bin_ids == bin_index)
+            )
+
+            counts[bin_index] = np.count_nonzero(m)
+
+            if counts[bin_index] == 0:
+                continue
+
+            area_sum = np.sum(area_values[m])
+
+            if not np.isfinite(area_sum) or area_sum <= 0:
+                continue
+
+            weighted_density = (
+                np.sum(target_values[m] * area_values[m])
+                / area_sum
+            )
+
+            means[bin_index] = weighted_density / mean_dens - 1.0
+
+        return counts, means
+
+    # full mean
+    full_selection = np.ones(len(table), dtype=bool)
+    counts, means = calculate_binned_mean(full_selection)
+    
+    # Leave-one-region-out jackknife
+    jackknife_means = np.full(
+        (n_jack, n_bins),
+        np.nan,
+        dtype=float,
+    )
+    
+    for i in range(n_jack):
+        selection = jack_ids != i
+        _, jackknife_means[i] = calculate_binned_mean(selection)
+
+    theta_bar = np.nanmean(jackknife_means, axis=0)
+
+    squared_difference = (
+        jackknife_means - theta_bar[None, :]
+    ) ** 2
+
+    # jackknife error
+    jk_var = (
+        (n_jack - 1) / n_jack
+        * np.nansum(squared_difference, axis=0)
+    )
+
+    std = np.sqrt(jk_var)
+
+    # remove bin with datacount < min_count
+    output_mask = (
+        (counts >= min_count)
+        & np.isfinite(means)
+        & np.isfinite(std)
+    )
+
+    return (
+        bin_centers[output_mask],
+        means[output_mask],
+        std[output_mask],
+    )
+
+
+def density_poisson_error(
+    table,
+    key,
+    target_col='target',
+    bins=10,
+    min_count=100,
+    use_binomial=True,
+):
+    """
+    Imaging attribute binごとのtarget density fluctuationと
+    counting-statistics errorを計算する。
+
+    Parameters
+    ----------
+    table : astropy.table.Table
+        must include
+        key, target_col, area, total
+
+        target_col : target density
+        area       : effective area
+        total      : random count before applying mask
+
+    key : str
+        Imaging attribute name
+
+    target_col : str, default='target'
+        Target density column name
+
+    bins : int or array-like, default=10
+        bin count
+
+    min_count : int, default=100
+        required minimum number of pixels included in a single bin 
+
+    use_binomial : bool, default=True
+        True:
+            treat N_ran | N_ran_tot as binominal distribution
+        False:
+            treat N_ran and N_ran_totas independent poisson distribution
+
+    Returns
+    -------
+    bin_centers : numpy.ndarray
+        center of each bin
+
+    mean : numpy.ndarray
+        target density fluctuation counted for each bin
+        n_bin / n_global - 1
+
+    error : numpy.ndarray
+        counting-statistics error。
+    """
+    required = {key, target_col, 'area', 'total'}
+    missing = required - set(table.colnames)
+
+    if missing:
+        raise KeyError(f"Missing columns: {sorted(missing)}")
+
+    imaging = np.asarray(table[key], dtype=float)
+    density_pixel = np.asarray(table[target_col], dtype=float)
+    effective_area_pixel = np.asarray(table['area'], dtype=float)
+    random_total = np.asarray(table['total'], dtype=float)
+
+    valid = (
+        np.isfinite(imaging)
+        & np.isfinite(density_pixel)
+        & np.isfinite(effective_area_pixel)
+        & np.isfinite(random_total)
+        & (effective_area_pixel >= 0)
+        & (random_total > 0)
+        & (effective_area_pixel <= area)
+    )
+
+    if not np.any(valid):
+        return (
+            np.array([]),
+            np.array([]),
+            np.array([]),
+        )
+
+    # density × effective area = target count
+    target_count = density_pixel * effective_area_pixel
+
+    # unmasked fraction
+    unmasked_fraction = (
+        effective_area_pixel / area
+    )
+
+    # N_ran = f_unmasked × N_ran,total
+    random_unmasked = (
+        unmasked_fraction * random_total
+    )
+
+    valid &= (
+        np.isfinite(target_count)
+        & np.isfinite(random_unmasked)
+        & (target_count >= 0)
+        & (random_unmasked >= 0)
+        & (random_unmasked <= random_total)
+    )
+
+    # Global mean density
+    global_target_count = np.sum(target_count[valid])
+    global_effective_area = np.sum(effective_area_pixel[valid])
+
+    if global_effective_area <= 0:
+        return (
+            np.array([]),
+            np.array([]),
+            np.array([]),
+        )
+
+    global_mean_density = (
+        global_target_count / global_effective_area
+    )
+
+    # Bin edge
+    if np.isscalar(bins):
+        fixed_bins = np.histogram_bin_edges(
+            imaging[valid],
+            bins=int(bins),
+        )
+    else:
+        fixed_bins = np.asarray(bins, dtype=float)
+
+    n_bins = len(fixed_bins) - 1
+    bin_centers = 0.5 * (
+        fixed_bins[:-1] + fixed_bins[1:]
+    )
+
+    bin_id = np.digitize(
+        imaging,
+        fixed_bins,
+        right=False,
+    ) - 1
+
+    bin_id[imaging == fixed_bins[-1]] = n_bins - 1
+
+    mean = np.full(n_bins, np.nan)
+    error = np.full(n_bins, np.nan)
+    counts = np.zeros(n_bins, dtype=int)
+
+    for i in range(n_bins):
+        m = (
+            valid
+            & (bin_id == i)
+        )
+
+        counts[i] = np.count_nonzero(m)
+
+        if counts[i] == 0:
+            continue
+
+        total_target = np.sum(target_count[m])
+        total_effective_area = np.sum(
+            effective_area_pixel[m]
+        )
+
+        if total_effective_area <= 0:
+            continue
+
+        density = total_target / total_effective_area
+
+        # n_bin / n_global - 1
+        mean[i] = (
+            density / global_mean_density - 1.0
+        )
+
+        # Actual unweighted countにだけ適用可能
+        target_variance = total_target
+
+        if use_binomial:
+            # Var(a_eff,j)
+            area_variance_pixel = (
+                area ** 2
+                * unmasked_fraction[m]
+                * (1.0 - unmasked_fraction[m])
+                / random_total[m]
+            )
+        else:
+            nran = random_unmasked[m]
+            nran_tot = random_total[m]
+
+            area_variance_pixel = (
+                area**2
+                * (
+                    nran / nran_tot**2
+                    + nran**2 / nran_tot**3
+                )
+            )
+
+        effective_area_variance = np.sum(
+            area_variance_pixel
+        )
+
+        density_variance = (
+            target_variance
+            / total_effective_area**2
+            +
+            total_target**2
+            * effective_area_variance
+            / total_effective_area**4
+        )
+
+        density_error = np.sqrt(density_variance)
+
+        # fluctuation n/n_global - 1 の誤差
+        # global mean density自体の誤差はここでは無視
+        error[i] = (
+            density_error / global_mean_density
+        )
+
+    output = (
+        (counts >= min_count)
+        & np.isfinite(mean)
+        & np.isfinite(error)
+    )
+
+    return (
+        bin_centers[output],
+        mean[output],
+        error[output],
+    )
 
 #################################################################################################################
-def jackknife_PS(df, key, mean_density, target_col, n_jack=20):
+def jackknife_PS(table, key, target_col, n_jack=20):
     nside = 256
     area = hp.nside2pixarea(nside,degrees=True)
     
-    full_healpix = np.arange(hp.nside2npix(nside))
-    full = pd.DataFrame({'healpix':full_healpix})
+    _mean_density = mean_density(table)
+    table = jackknife(table) #apply jacknife ID
     
-    s_mean = np.sum(df[key]*df['area'])/np.sum(df['area'])
-    delta_s = df[key]/s_mean - 1.0
+    s_mean = np.sum(table[key]*table['area'])/np.sum(table['area'])
+    delta_s = table[key]/s_mean - 1.0
     
-    delta_i = df[target_col]/mean_density - 1.0
+    delta_i = table[target_col]/_mean_density - 1.0
     
-    data = pd.DataFrame({
-        'healpix':df['healpix'],
-        'delta_s':delta_s,
-        'delta_i':delta_i,
-        'jackknife':df['jackknife']
+    _table = Table({
+        'healpix': table['healpix'],
+        "delta_i": delta_i,
+        "delta_s": delta_s
     })
     
-    data = data.dropna()
+    lmin = 10
+    lmax = 3 * nside
+
+    edges = np.unique(
+        np.logspace(
+            np.log10(lmin),
+            np.log10(lmax),
+            11,
+        ).astype(int)
+    )
+
+    b = nmt.NmtBin.from_edges(
+        edges[:-1],
+        edges[1:],
+    )
+
+    x = b.get_effective_ells()
     
-    full_data = pd.merge(full, data, on='healpix', how='left')
-    
-    map_s = hp.ma(full_data['delta_s'])
-    map_s.mask = np.isnan(full_data['delta_s'])
-    
-    map_i = hp.ma(full_data['delta_i'])
-    map_i.mask = np.isnan(full_data['delta_i'])
-    
-    cl_is = hp.anafast(map_s, map_i, lmax = 100)
-    cl_ss = hp.anafast(map_s, map_s, lmax = 100)
-    
-    x = np.arange(101)
-    y = cl_is**2/cl_ss
-    
-    #data = devide_autumn(data)
-    
+    y = calculate_PS(
+        table,
+        key,
+        target_col,
+        b,
+        nside,
+    )
+
     jacks = []
-    
+
     for i in range(n_jack):
-        full_data = pd.merge(full, data[data['jackknife']!=i], on='healpix', how='left')
-    
-        map_s = hp.ma(full_data['delta_s'])
-        map_s.mask = np.isnan(full_data['delta_s'])
-    
-        map_i = hp.ma(full_data['delta_i'])
-        map_i.mask = np.isnan(full_data['delta_i'])
-    
-        cl_is = hp.anafast(map_s, map_i, lmax = 100)
-        cl_ss = hp.anafast(map_s, map_s, lmax = 100)
-    
-        _y = cl_is**2/cl_ss
-        jacks.append(_y)
-        
-    jacks = np.array(jacks)
-    jk_std = np.sqrt((n_jack - 1) * np.nanmean((jacks - y[None, :])**2, axis=0))
-    
-    
-    
+        jack_table = table[table["jackknife"] != i]
+
+        y_jack = calculate_PS(
+            jack_table,
+            key,
+            target_col,
+            b,
+            nside,
+        )
+
+        jacks.append(y_jack)
+
+    jacks = np.asarray(jacks)
+
+    jack_mean = np.nanmean(jacks, axis=0)
+
+    jk_std = np.sqrt(
+        (n_jack - 1)
+        * np.nanmean(
+            (jacks - jack_mean[None, :])**2,
+            axis=0,
+        )
+    )
     return x, y, jk_std
 
+def calculate_PS(table, key, target_col, bins, nside):
+    npix = hp.nside2npix(nside)
+
+    healpix = np.asarray(table["healpix"], dtype=int)
+    area = np.asarray(table["area"], dtype=float)
+    target = np.asarray(table[target_col], dtype=float)
+    systematics = np.asarray(table[key], dtype=float)
+
+    valid = (
+        np.isfinite(area)
+        & np.isfinite(target)
+        & np.isfinite(systematics)
+        & (area > 0)
+    )
+
+    healpix = healpix[valid]
+    area = area[valid]
+    target = target[valid]
+    systematics = systematics[valid]
+
+    # target_colが既に面密度の場合
+    mean_target = np.sum(target * area) / np.sum(area)
+
+    # imaging propertyの面積加重平均
+    mean_systematics = np.sum(systematics * area) / np.sum(area)
+
+    delta_i = target / mean_target - 1.0
+    delta_s = systematics / mean_systematics - 1.0
+
+    mask = np.zeros(npix, dtype=float)
+    mask[healpix] = 1.0
+
+    map_i = np.zeros(npix, dtype=float)
+    map_s = np.zeros(npix, dtype=float)
+
+    map_i[healpix] = delta_i
+    map_s[healpix] = delta_s
+
+    field_i = nmt.NmtField(mask, [map_i])
+    field_s = nmt.NmtField(mask, [map_s])
+
+    cl_is = nmt.compute_full_master(
+        field_i,
+        field_s,
+        bins,
+    )[0]
+
+    cl_ss = nmt.compute_full_master(
+        field_s,
+        field_s,
+        bins,
+    )[0]
+
+    result = np.full_like(cl_is, np.nan)
+
+    good = (
+        np.isfinite(cl_is)
+        & np.isfinite(cl_ss)
+        & (cl_ss > 0)
+    )
+
+    result[good] = cl_is[good] ** 2 / cl_ss[good]
+
+    return result

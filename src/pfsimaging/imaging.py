@@ -8,7 +8,6 @@ from astropy.table import Table, vstack, join
 from multiprocessing import Pool
 
 from functools import partial
-import pandas as pd
 
 from pfsimaging import Loader as loader
 
@@ -59,16 +58,37 @@ def get_property_all(tractpatch, dustmap, config, nprocess=1, verbose=False):
         valid_results = [res for res in results if res is not None]
 
         if valid_results:
-            all_property = pd.concat(valid_results, ignore_index=True)
+            all_property = vstack(valid_results)
 
             # When healpixels are overlapping between different tracts
             # take the area weighted average between the effective overlapping 
             # area for all of the tracts 
-            all_columns = property_name
-            properties = all_property.groupby('healpix').apply(lambda x: pd.Series(
-                {col: np.sum(x[col] * x['eff_area']) / np.sum(x['eff_area']) for col in all_columns} |  # Seeing, depth
-                {'area': np.sum(x['eff_area']) / np.sum(x['total']) * area}|
-                {'total': np.sum(x['total'])})).reset_index()
+            
+            groups = all_property.group_by('healpix').groups
+
+            rows = []
+
+            for g in groups:
+                row = {}
+                row['healpix'] = g['healpix'][0]
+
+                eff_area = np.asarray(g['eff_area']) #normalized effective area
+                t_eff_area = np.sum(eff_area)
+
+                # effective area weighted mean of imaging attributes
+                for col in property_name:
+                    x = np.asarray(g[col]) #imaging attribute
+                    row[col] = np.sum(x * eff_area) / t_eff_area
+
+                # area
+                row['area'] = t_eff_area / np.sum(g['total']) * area #effective area
+
+                # total
+                row['total'] = np.sum(g['total']) #total number of randoms
+
+                rows.append(row)
+
+            properties = Table(rows)
             
             if verbose: print(f'adding dust extinction for {dustmap}')
             properties = add_ext(properties, dustmap)
@@ -110,35 +130,46 @@ def get_property_tract(tract, config=None, verbose=False):
     all_healpix = to_little_endian(all_healpix)
     all_patch = to_little_endian(all_patch)
     
+    if (len(all_ra)==0):
+        print(f"tract {tract} is outside observed footprint")
+        return None
+    
     randoms = loader.Random(tract, config)
     randoms.load_bsmask(config)
     randoms.load_bgmask(config)
-    
     random_mask = randoms.mask # true if "inside" masked region
-    if(random_mask is None) or (np.sum(random_mask) == len(random_mask)):
-        print(f"No effective observation area in tract {tract}")
-        return None
-    random_ID = randoms.objectID[~random_mask] #objectID of the randoms that were outside masks
     
-    df = pd.DataFrame({
+    if(randoms.ra is None) or (np.sum(random_mask) == len(random_mask)):
+        #Has randoms but all of them were inside masks or outside footprint
+        print(f"No effective observation area in tract {tract}")
+        mask = np.zeros(len(all_ID), dtype=bool)
+    else:
+        random_ID = randoms.objectID[~random_mask] #objectID of the randoms that were outside masks
+        mask = np.isin(all_ID, random_ID)
+                       
+    table = Table({
         'healpix': all_healpix,
-        'mask': np.isin(all_ID, random_ID), #true if 'outside' masks
+        'mask': mask, #true if 'outside' masks
         'patch': all_patch,
     })
+    
+    #group all the randoms into healpixels
+    grouped = table.group_by("healpix").groups
 
-    properties = (
-        df.groupby('healpix')
-        .agg(
-            total=('mask', 'size'),   # total random count before masking
-            eff_area=('mask', 'sum')    # random count after masking
-        )
-        .reset_index()
-    )
+    rows = []
+    for g in grouped:
+        rows.append({
+            "healpix": g["healpix"][0],
+            "total": len(g),               # mask の size
+            "eff_area": np.sum(g["mask"])  # mask の sum
+        })
 
-    patch_prop = band_property(tract, config, df)
+    properties = Table(rows)
+
+    patch_prop = band_property(tract, config, table)
     if patch_prop is None:
         return None
-    properties = pd.merge(properties, patch_prop, on='healpix', how='left')
+    properties = join(properties, patch_prop, keys='healpix', join_type='left')
     
     return properties
 
@@ -150,7 +181,7 @@ def to_little_endian(arr):
     return arr
 
 
-def band_property(tract, config, df):
+def band_property(tract, config, table):
     """
     function to add the g,r,i,z,y-depth and seeing of each healpixels
     
@@ -159,8 +190,8 @@ def band_property(tract, config, df):
     tract: int
     ID of tract considered
     
-    df: PdDataframe
-    dataframe including the randoms in the concidered tract
+    table: astropy table
+    Table including the randoms in the concidered tract
     column: 'healpix', 'mask', 'patch'
     1. healpix: which healpix the random is included in
     2. mask: true if outside mask
@@ -168,8 +199,8 @@ def band_property(tract, config, df):
 
     output
     ------------------------------------------
-    t:PdDataframe
-    dataframe  of imaging properties for each randoms points
+    t:astropy table
+    Table  of imaging properties for each randoms points
     defined by cross matching patch ID
     """
     patches = loader.Patches()
@@ -180,16 +211,41 @@ def band_property(tract, config, df):
         print(f"patch column missing in tract {tract} property")
         return None
 
-    df_valid = df[df['mask']] #Get randoms outside the masked area
+    table_valid = table[table['mask']] #Get randoms outside the masked area
+    
+    if(np.sum(table['mask']) == 0):#If there are no randoms outside mask (effective area = 0)
+        # set all the imaging attributes as zero
+        # This will not matter because the effective area is 0
+        u, indices = np.unique(table['healpix'], return_index=True)
+        patch_prop = Table({
+            'healpix':u,
+            'patch':table['patch'][indices]
+        })
+        for col in property_name:
+            patch_prop[col] = np.zeros(len(u))
+        return patch_prop
 
-    patch_prop = pd.merge(
-        df_valid[['healpix','patch']],
+    patch_prop = join(
+        table_valid[['healpix','patch']],
         Property,
-        on='patch',
-        how='left'
+        keys='patch',
+        join_type='left'
     )
 
-    patch_prop = patch_prop.groupby('healpix')[property_name].mean().reset_index()
+    #take the average per heal pixel
+    groups = patch_prop.group_by('healpix').groups
+
+    rows = []
+
+    for g in groups:
+        row = {'healpix': g['healpix'][0]}
+
+        for col in property_name:
+            row[col] = np.mean(g[col])
+
+        rows.append(row)
+
+    patch_prop = Table(rows)
     return patch_prop
    
 
@@ -285,9 +341,11 @@ def add_stellar_density(config, field, properties):
             'healpix':_healpy,
             'star' : counts
         }
-        table1 = pd.DataFrame(data1)
-        properties = pd.merge(properties, table1, on='healpix', how='left')
-        properties['star'] = properties['star'].fillna(0)/area
+        table1 = Table(data1)
+        properties = join(properties, table1, keys='healpix', join_type='left')
+
+        properties['star'] = np.ma.filled(properties['star'], 0).astype(float)
+        properties['star'] /= area
     
     return properties
     
@@ -382,11 +440,12 @@ def add_target_density(config, properties):
         
         # count the number of galaxies in each healpix
         _healpy, counts = np.unique(healpix, return_counts=True)
-        data1 = pd.DataFrame({'healpix':_healpy, 'target' : counts})
+        table1 = Table({'healpix':_healpy, 'target' : counts})
         
-        merged = pd.merge(properties, data1, on='healpix', how='left')
+        merged = join(properties, table1, keys='healpix', join_type='left')
         
-        merged = merged.fillna({'target': 0})
+        merged['target'] = merged['target'].filled(0)
+        merged['target'] = merged['target'].astype(float)
         merged['target'] /= merged['area']
         return merged
     else:
@@ -399,10 +458,9 @@ def anomaly():
     dec_deg = 0.2
     radius_deg = 0.85
 
-    # 中心方向ベクトル
     vec = hp.ang2vec(ra_deg, dec_deg, lonlat=True)
 
-    # 円内の healpix index
+    # healpix index within radius_deg
     pix = hp.query_disc(
         nside,
         vec,
@@ -413,29 +471,58 @@ def anomaly():
 
     return pix
 
-def clean_pixels(table, field):
+def clean_pixels(table, field, verbose=False):
+    if verbose:
+        total = len(table['healpix'])
+        print(f"Original pixel count is {total} ")
+    
     #remove anomaly
     if(field == 'spring'):
         anomaly_pix = anomaly()
         mask = ~np.isin(table['healpix'], anomaly_pix)
-    else:
-        mask = np.ones_like(table['healpix'], dtype=bool) 
+        table = table[mask]
+        
+        if verbose:
+            masked = total - np.sum(mask)
+            print(f"Removed {masked} pixels in anomalous region in {field} field")
+            
+    #remove healpix with small effective area
+    mask = table['area'] > 0.0
+    
+    if verbose:
+        total = len(table['healpix'])
+        masked = total - np.sum(mask)
+        print(f"Removed {masked} pixels with 0 effective area in {field} field")
+    table = table[mask]
         
     #remove healpix with small random count
     mean_count = area * 3600.0 * 100.0
-    mask &= table['total'] > mean_count / 2.0
-    
-    #remove healpix with small effective area
-    mask &= table['area'] > 0.0
+    mask = table['total'] > mean_count / 2.0
+    if verbose:
+        total = len(table['healpix'])
+        masked = total - np.sum(mask)
+        print(f"Removed {masked} pixels with small random count in {field} field")
+    table = table[mask]
 
     #remove healpix with nan
+    mask = np.ones(len(table['healpix']), dtype=bool)
     for col in table.colnames:
         if np.issubdtype(table[col].dtype, np.number):
             mask &= ~np.isnan(table[col])
 
+    if verbose:
+        total = len(table['healpix'])
+        masked = total - np.sum(mask)
+        print(f"Removed {masked} pixels with nans in {field} field")
+    table = table[mask]
     
     #remove healpix with no star
-    mask &= table['star'] > 0.0
+    mask = table['star'] > 0.0
+    if verbose:
+        total = len(table['healpix'])
+        masked = total - np.sum(mask)
+        print(f"Removed {masked} pixels with 0 stars in {field} field")
+    table = table[mask]
     
-    return table[mask]
+    return table
     
