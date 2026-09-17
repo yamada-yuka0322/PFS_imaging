@@ -22,8 +22,8 @@ from pfsimaging import train as train
 #2. Quadratic Regression
 #3. Neural Network (from optuna best model)
 
-def prepare_data(df, keys):
-    df_cleaned = df[df['target']>0.0]
+def prepare_data(df, keys, seed):
+    df_cleaned = df[(df['target']>0.0)&(np.isfinite(df["target"]))]
     properties = df_cleaned[keys]
     if 'star' in keys:
         properties = properties.copy()
@@ -41,11 +41,11 @@ def prepare_data(df, keys):
 
     X = np.concatenate([np.array(df_standardized[key]).reshape(-1, 1) for key in keys], axis=1)
 
-    train_X, test_X, train_Y, test_Y = train_test_split(X, density)
+    train_X, test_X, train_Y, test_Y = train_test_split(X, density, random_state=seed)
     return train_X, test_X, train_Y, test_Y, X, df_cleaned.index
     
 
-def linear_weights(Property, keys):
+def linear_weights(Property, keys, seed=42):
     """function to calculate weights using linear regression
 
     Parameters
@@ -63,7 +63,7 @@ def linear_weights(Property, keys):
     """
     df = Property.to_pandas()
     df_cleaned = df.dropna()
-    train_X, test_X, train_Y, test_Y, X, idx = prepare_data(df, keys)
+    train_X, test_X, train_Y, test_Y, X, idx = prepare_data(df, keys, seed = seed)
 
     #learn using linear regression
     regr = LinearRegression()
@@ -92,7 +92,7 @@ def linear_weights(Property, keys):
     table = Table.from_pandas(df_out)
     return table
 
-def quadratic_weights(Property, keys):
+def quadratic_weights(Property, keys, seed = 42):
     """function to calculate weights using quadratic regression
 
     Parameters
@@ -110,7 +110,7 @@ def quadratic_weights(Property, keys):
     """
     df = Property.to_pandas()
     df_cleaned = df.dropna()
-    train_X, test_X, train_Y, test_Y, X, idx = prepare_data(df, keys)
+    train_X, test_X, train_Y, test_Y, X, idx = prepare_data(df, keys, seed = seed)
     
     # Transform features to polynomial (degree=2)
     poly = PolynomialFeatures(degree=2)

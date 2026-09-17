@@ -16,6 +16,8 @@ import os
 
 import json
 
+torch.manual_seed(42)
+
 class CustomLoss(nn.Module):
     """
     Container of loss function. Completeness weighted mean square.
@@ -65,12 +67,14 @@ def build_model(input_dim, width, depth):
     
     """
     layers = [nn.Linear(input_dim, width), nn.BatchNorm1d(width), nn.ReLU()]
+    #layers = [nn.Linear(input_dim, width), nn.ReLU()]
     for _ in range(depth - 1):
         layers += [nn.Linear(width, width), nn.BatchNorm1d(width), nn.ReLU()]
+        #layers += [nn.Linear(width, width), nn.ReLU()]
     layers += [nn.Linear(width, 1)]
     return nn.Sequential(*layers)
 
-def make_objective(test_X, test_Y, test_Fpix, val_X, val_Y, val_Fpix, loader):
+def make_objective(test_X, test_Y, test_Fpix, val_X, val_Y, val_Fpix, loader, input_dim):
     """
     Create an Optuna objective function for neural network hyperparameter optimization.
 
@@ -115,13 +119,14 @@ def make_objective(test_X, test_Y, test_Fpix, val_X, val_Y, val_Fpix, loader):
             Minimum validation loss achieved during training.
         """
         # suggest hiperparameters
-        lr = trial.suggest_float("lr", 1e-5, 1e-3, log=True)
-        depth = trial.suggest_int("depth", 2, 4)
-        width = trial.suggest_categorical("width", [16, 32, 64, 128])
+        lr = trial.suggest_float("lr", 1e-4, 3e-3, log=True)
+        depth = trial.suggest_int("depth", 2, 5)
+        width = trial.suggest_categorical("width", [32, 64, 128, 256])
+        weight_decay = trial.suggest_categorical("weight_decay",[0.0, 1e-6, 1e-5, 1e-4])
 
-        model = build_model(12, width, depth)
+        model = build_model(input_dim, width, depth)
         loss_fn = CustomLoss()
-        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+        optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
 
         best_val_loss = float("inf")
         patience = 20 #If loss doesn't get better after patience steps, optuna stops
@@ -129,11 +134,20 @@ def make_objective(test_X, test_Y, test_Fpix, val_X, val_Y, val_Fpix, loader):
         best_model = copy.deepcopy(model)
         EPOCHS = 300
         
-        epoch = []
-        loss_list = []
+        best_epoch = None
+        stopped_epoch = None
+        best_sd = None
+        test_loss = np.nan
+        
+        train_loss_history = []
+        val_loss_history = []
+        test_loss_history = []
 
-        for t in range(EPOCHS):
+        for epoch in range(EPOCHS):
             model.train()
+            
+            train_squared_error_sum = 0.0
+            train_weight_sum = 0.0
             for _x, _y, _fpix in loader:
                 y_hat = model(_x)
                 loss = loss_fn(y_hat, _y, _fpix)
@@ -141,15 +155,30 @@ def make_objective(test_X, test_Y, test_Fpix, val_X, val_Y, val_Fpix, loader):
                 loss.backward()
                 optimizer.step()
 
+                with torch.no_grad():
+                    squared_error = (y_hat - _y) ** 2
+
+                    train_squared_error_sum += torch.sum(_fpix * squared_error).item()
+
+                    train_weight_sum += torch.sum(_fpix).item()
+
+            train_loss = (train_squared_error_sum / train_weight_sum)
+
             model.eval()
             with torch.no_grad():
                 val_pred = model(val_X)
                 val_loss = loss_fn(val_pred, val_Y, val_Fpix).item()
+                train_loss_history.append(float(train_loss))
+                val_loss_history.append(val_loss)
+                
+                test_pred = model(test_X)
+                test_loss = loss_fn(test_pred, test_Y, test_Fpix).item()
+                test_loss_history.append(test_loss)
 
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
-                test_pred = model(test_X)
-                test_loss = loss_fn(test_pred, test_Y, test_Fpix).item()
+                best_epoch = epoch + 1
+                
                 trigger_times = 0
                 best_model = copy.deepcopy(model)
                 best_sd = copy.deepcopy(model.state_dict())
@@ -158,18 +187,35 @@ def make_objective(test_X, test_Y, test_Fpix, val_X, val_Y, val_Fpix, loader):
                 if trigger_times >= patience:
                     break
 
-        # trial に保存（あとで一括保存する）
-        trial.set_user_attr("state_dict", best_sd)
-        trial.set_user_attr("val_loss", float(best_val_loss))
-        trial.set_user_attr("test_loss", float(test_loss))
-        trial.set_user_attr("epochs", EPOCHS)
+        # early stoppingしなかった場合
+        if stopped_epoch is None:
+            stopped_epoch = EPOCHS
 
+        # 念のため
+        if best_sd is None:
+            best_sd = copy.deepcopy(model.state_dict())
+            best_epoch = stopped_epoch
+
+        trial.set_user_attr("state_dict",best_sd)
+        trial.set_user_attr("val_loss",float(best_val_loss))
+
+        trial.set_user_attr("test_loss",float(test_loss))
+
+        trial.set_user_attr("best_epoch",int(best_epoch))
+
+        trial.set_user_attr("stopped_epoch",int(stopped_epoch))
+        
+        trial.set_user_attr("train_loss_history",train_loss_history)
+
+        trial.set_user_attr("val_loss_history", val_loss_history)
+        trial.set_user_attr("test_loss_history", test_loss_history)
 
         return best_val_loss
-
+    
     return objective
-
+        
 def run_optuna_nn(run_dir, Property, keys, n_trials=200, top_k=5):
+        
     """
     Function to train the neural network
     
@@ -204,7 +250,7 @@ def run_optuna_nn(run_dir, Property, keys, n_trials=200, top_k=5):
     objective = make_objective(
         test_X, test_Y, test_Fpix,
         val_X, val_Y, val_Fpix,
-        loader
+        loader, data["input_dim"]
     )
 
     study = optuna.create_study(direction="minimize")
@@ -246,7 +292,7 @@ def prepare_nn_data(Property, keys, nside=256, test_size=0.2):
     4. input_dim: number of input imaging attributes
     5. scaler: scaler to normalize the imaging attributes
     """
-    cleaned = Property[Property['target']>0.0]
+    cleaned = Property[(Property['target']>0.0)&(np.isfinite(Property["target"]))]
 
     properties = cleaned[keys]
     
@@ -356,11 +402,20 @@ def save_optuna_results(study, input_dim, run_dir, top_k=5):
         rows.append({
             "trial": t.number,
             "value(val_loss)": t.value,
-            "val_loss": t.user_attrs.get("val_loss", np.nan),
-            "test_loss": t.user_attrs.get("test_loss", np.nan),
+            "val_loss": t.user_attrs.get(
+                "val_loss", np.nan
+            ),
+            "test_loss": t.user_attrs.get(
+                "test_loss", np.nan
+            ),
+            "best_epoch": t.user_attrs.get(
+                "best_epoch", np.nan
+            ),
+            "stopped_epoch": t.user_attrs.get(
+                "stopped_epoch", np.nan
+            ),
             "params": json.dumps(t.params),
         })
-
     df_log = pd.DataFrame(rows).sort_values("value(val_loss)")
     df_log.to_csv(os.path.join(run_dir, "trials_log.csv"), index=False)
 
@@ -384,11 +439,51 @@ def save_optuna_results(study, input_dim, run_dir, top_k=5):
             "state_dict": model.state_dict(),
             "config": {"input_dim": input_dim, "width": width, "depth": depth},
             "lr": t.params["lr"],
+            "weight_decay": t.params["weight_decay"],
             "val_loss": t.user_attrs.get("val_loss", np.nan),
             "test_loss": t.user_attrs.get("test_loss", np.nan),
             "trial": t.number,
             "params": t.params,
         }, fname)
+        
+        train_history = t.user_attrs.get(
+            "train_loss_history", []
+        )
+
+        val_history = t.user_attrs.get(
+            "val_loss_history", []
+        )
+        test_history = t.user_attrs.get(
+            "test_loss_history", []
+        )
+
+
+        n_epochs = min(
+            len(train_history),
+            len(val_history),
+            len(test_history),
+        )
+
+        history_df = pd.DataFrame({
+            "epoch": np.arange(1, n_epochs + 1),
+            "train_loss": train_history[:n_epochs],
+            "val_loss": val_history[:n_epochs],
+            "test_loss": test_history[:n_epochs],
+        })
+
+        history_path = os.path.join(
+            run_dir,
+            (
+                f"rank{rank:02d}_"
+                f"trial{tnum:03d}_"
+                "loss_history.csv"
+            ),
+        )
+
+        history_df.to_csv(
+            history_path,
+            index=False,
+        )
 
     best = study.best_trial
     best_params = best.params
@@ -409,8 +504,52 @@ def save_optuna_results(study, input_dim, run_dir, top_k=5):
             "depth": best_params["depth"],
         },
         "lr": best_params["lr"],
-        "val_loss": best.user_attrs.get("val_loss", np.nan),
-        "test_loss": best.user_attrs.get("test_loss", np.nan),
+        "weight_decay": best_params["weight_decay"],
+        "val_loss": best.user_attrs.get(
+            "val_loss", np.nan
+        ),
+        "test_loss": best.user_attrs.get(
+            "test_loss", np.nan
+        ),
+        "best_epoch": best.user_attrs.get(
+            "best_epoch", np.nan
+        ),
+        "stopped_epoch": best.user_attrs.get(
+            "stopped_epoch", np.nan
+        ),
         "trial": best.number,
         "params": best_params,
     }, best_path)
+    
+    best_train_history = best.user_attrs.get(
+        "train_loss_history", [])
+
+    best_val_history = best.user_attrs.get(
+        "val_loss_history", []
+    )
+    
+    best_test_history = best.user_attrs.get(
+        "test_loss_history", []
+    )
+
+
+    n_epochs = min(
+        len(best_train_history),
+        len(best_val_history),
+        len(best_test_history)
+    )
+
+    best_history_df = pd.DataFrame({
+        "epoch": np.arange(1, n_epochs + 1),
+        "train_loss": best_train_history[:n_epochs],
+        "val_loss": best_val_history[:n_epochs],
+        "test_loss": best_test_history[:n_epochs]
+    })
+
+    best_history_df.to_csv(
+        os.path.join(
+            run_dir,
+            "best_model_loss_history.csv",
+        ),
+        index=False,
+    )

@@ -9,7 +9,7 @@ import os
 
 import yaml
 
-keys = ['gseeing', 'rseeing', 'iseeing', 'zseeing', 'yseeing', 'star', 'g_depth', 'r_depth', 'i_depth', 'z_depth', 'y_depth', 'csfd_desi_extinction']
+keys = ['gseeing', 'rseeing', 'iseeing', 'zseeing', 'yseeing', 'g_depth', 'r_depth', 'i_depth', 'z_depth', 'y_depth','star','csfd_desi_extinction']
 #keys = ['gseeing', 'rseeing', 'iseeing', 'zseeing', 'yseeing', 'g_depth', 'r_depth', 'i_depth', 'z_depth', 'y_depth', 'csfd_desi_extinction']
 
 def parse_args():
@@ -28,8 +28,8 @@ def parse_args():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--config', required=True,
                     help='path to the config file which specify necessary path')
-    ap.add_argument('--imaging-dir', required=True, 
-            help='directory path where the imaging properties are stored')
+    ap.add_argument('--imaging', required=True, 
+            help='file in which imaging properties and target densities are stored')
     ap.add_argument('--out-dir', required=True, 
             help='output path')
     ap.add_argument('--method', '-m', nargs='+', default=['lin', 'quad', 'nn'],
@@ -73,7 +73,8 @@ def main():
     out_dir = os.path.join(args.out_dir, args.run_name)
     os.makedirs(out_dir, exist_ok=True)
     
-    property_file = os.path.join(args.imaging_dir, "all_property_cleaned.fits")
+    property_file = os.path.join(args.imaging)
+    #property_file = os.path.join(args.imaging_dir, "null_mock_property.fits")
 
     if os.path.exists(property_file):
         with fits.open(property_file) as hdu:
